@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>多工具 AI Agent</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --card: #ffffff;
+      --text: #1f2733;
+      --muted: #8b95a5;
+      --line: #e8ecf3;
+      --primary: #6b4bff;
+      --primary-weak: #efeaff;
+      --code-bg: #f7f8fb;
+      --radius: 14px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+      display: flex; justify-content: center; padding: 48px 16px;
+    }
+    .wrap { width: 100%; max-width: 760px; }
+
+    header { text-align: center; margin-bottom: 26px; }
+    header .logo {
+      width: 46px; height: 46px; margin: 0 auto 12px; background: var(--primary);
+      border-radius: 14px; display: flex; align-items: center; justify-content: center;
+      color: #fff; font-size: 22px;
+    }
+    header h1 { font-size: 21px; margin: 0 0 6px; font-weight: 600; }
+    header p { margin: 0; color: var(--muted); font-size: 13px; }
+
+    .search {
+      background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+      padding: 8px 8px 8px 16px; display: flex; align-items: center; gap: 8px;
+      box-shadow: 0 2px 10px rgba(31, 39, 51, .04);
+    }
+    .search input { flex: 1; border: none; outline: none; background: transparent; font-size: 15px; padding: 10px 0; color: var(--text); }
+    .search input::placeholder { color: #b3bbc8; }
+    .search button {
+      border: none; background: var(--primary); color: #fff; padding: 11px 20px;
+      border-radius: 10px; font-size: 14px; cursor: pointer; white-space: nowrap; transition: .15s;
+    }
+    .search button:hover:not(:disabled) { background: #5a3ae6; }
+    .search button:disabled { background: #c3b6f5; cursor: default; }
+
+    .examples { margin: 12px 2px 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .examples > span { color: var(--muted); font-size: 12.5px; }
+    .chip {
+      border: 1px solid var(--line); background: #fff; color: #55617a; font-size: 12.5px;
+      padding: 5px 11px; border-radius: 999px; cursor: pointer; transition: .15s;
+    }
+    .chip:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-weak); }
+
+    .card {
+      margin-top: 22px; background: var(--card); border: 1px solid var(--line);
+      border-radius: var(--radius); padding: 20px;
+      box-shadow: 0 2px 10px rgba(31, 39, 51, .04); animation: in .18s ease-out;
+    }
+    @keyframes in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+    .label { font-size: 12px; color: var(--muted); letter-spacing: .04em; margin-bottom: 8px; }
+    .answer { font-size: 15.5px; line-height: 1.75; white-space: pre-wrap; word-break: break-word; }
+    .divider { height: 1px; background: var(--line); margin: 16px 0; }
+
+    /* 工具调用轨迹 */
+    .trace-head { display: flex; align-items: center; gap: 8px; }
+    .tag {
+      background: var(--primary-weak); color: var(--primary); padding: 2px 9px;
+      border-radius: 999px; font-size: 12px; font-weight: 500;
+    }
+    .trace { margin-top: 12px; }
+    .step {
+      position: relative; padding: 0 0 16px 30px; border-left: 2px solid var(--line);
+      margin-left: 9px; animation: in .18s ease-out;
+    }
+    .step:last-child { border-left-color: transparent; padding-bottom: 0; }
+    .step .dot {
+      position: absolute; left: -11px; top: -2px; width: 20px; height: 20px; border-radius: 50%;
+      background: var(--primary-weak); color: var(--primary); font-size: 11.5px; font-weight: 600;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .step .tool { font-size: 13.5px; font-weight: 600; color: var(--text); }
+    .kv { margin-top: 7px; font-size: 12.5px; }
+    .kv .k { color: var(--muted); margin-right: 6px; }
+    code {
+      background: var(--code-bg); border: 1px solid var(--line); border-radius: 6px;
+      padding: 2px 6px; font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+      color: #445069; word-break: break-all;
+    }
+    pre {
+      margin: 6px 0 0; background: var(--code-bg); border: 1px solid var(--line);
+      border-radius: 8px; padding: 10px 12px; font-family: ui-monospace, Consolas, monospace;
+      font-size: 12px; line-height: 1.6; color: #445069; white-space: pre-wrap;
+      word-break: break-word; max-height: 220px; overflow: auto;
+    }
+
+    .loading { margin-top: 22px; color: var(--muted); font-size: 14px; display: flex; align-items: center; gap: 9px; }
+    .spinner {
+      width: 15px; height: 15px; border: 2px solid var(--line); border-top-color: var(--primary);
+      border-radius: 50%; animation: spin .7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .note { margin-top: 12px; font-size: 12.5px; color: #b06a00; background: #fff8e6; border: 1px solid #ffe2a8; padding: 8px 10px; border-radius: 8px; }
+    .err { margin-top: 18px; color: #d93a3a; font-size: 14px; }
+    .hidden { display: none !important; }
+    footer { text-align: center; color: #b3bbc8; font-size: 12px; margin-top: 30px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="logo">⚙</div>
+      <h1>多工具 AI Agent</h1>
+      <p>自己决定调用哪些工具来完成你的任务</p>
+    </header>
+
+    <div class="search">
+      <input id="q" placeholder="给 Agent 一个任务，例如：读一下 data/sales.csv，告诉我销售额最高的三个产品" autocomplete="off" />
+      <button id="btn" onclick="ask()">执行</button>
+    </div>
+
+    <div class="examples">
+      <span>试试：</span>
+      <div class="chip" onclick="askExample(this)">读一下 data/sales.csv，告诉我销售额最高的三个产品</div>
+      <div class="chip" onclick="askExample(this)">哪个地区的销售额最高？</div>
+      <div class="chip" onclick="askExample(this)">现在几点了</div>
+      <div class="chip" onclick="askExample(this)">123*456 等于多少</div>
+    </div>
+
+    <div id="loading" class="loading hidden">
+      <div class="spinner"></div><span>Agent 正在思考并调用工具…（可能需要十几秒）</span>
+    </div>
+
+    <div id="out" class="card hidden">
+      <div class="label">回答</div>
+      <div class="answer" id="answer"></div>
+      <div class="divider"></div>
+      <div class="trace-head">
+        <div class="label" style="margin:0">工具调用轨迹</div>
+        <span class="tag" id="steps"></span>
+      </div>
+      <div id="trace" class="trace"></div>
+      <div id="note" class="note hidden"></div>
+    </div>
+
+    <div id="err" class="err"></div>
+
+    <footer>Function Calling · 工具调用 · 错误容错 · FastAPI</footer>
+  </div>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    const btn = $('btn'), input = $('q'), errEl = $('err');
+
+    // 工具返回的内容要转义，避免把内容当成 HTML 执行（XSS）
+    function esc(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function askExample(el) {
+      input.value = el.textContent.trim();
+      ask();
+    }
+
+    function renderTrace(trace) {
+      const box = $('trace');
+      box.innerHTML = '';
+      if (!trace || trace.length === 0) {
+        box.innerHTML = '<div class="kv"><span class="k">本次没有调用任何工具</span></div>';
+        return;
+      }
+      trace.forEach((t, i) => {
+        const step = document.createElement('div');
+        step.className = 'step';
+        const args = t.arguments && Object.keys(t.arguments).length
+          ? JSON.stringify(t.arguments) : '{}';
+        const result = t.result == null ? '' : t.result;
+        step.innerHTML =
+          '<div class="dot">' + (i + 1) + '</div>' +
+          '<div class="tool">' + esc(t.tool) + '</div>' +
+          '<div class="kv"><span class="k">参数</span><code>' + esc(args) + '</code></div>' +
+          '<pre>' + esc(result) + '</pre>';
+        box.appendChild(step);
+      });
+    }
+
+    async function ask() {
+      const question = input.value.trim();
+      errEl.textContent = '';
+      if (!question) { errEl.textContent = '请先输入任务'; return; }
+
+      btn.disabled = true;
+      $('out').classList.add('hidden');
+      $('loading').classList.remove('hidden');
+
+      try {
+        const res = await fetch('/agent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question })
+        });
+        if (!res.ok) throw new Error('接口返回 ' + res.status);
+        const data = await res.json();
+
+        $('answer').textContent = data.answer || '(无回答)';
+        $('steps').textContent = '调用了 ' + (data.steps || 0) + ' 次工具';
+        renderTrace(data.trace);
+
+        if (data.note) {
+          $('note').textContent = data.note;
+          $('note').classList.remove('hidden');
+        } else {
+          $('note').classList.add('hidden');
+        }
+        $('out').classList.remove('hidden');
+      } catch (e) {
+        errEl.textContent = '请求失败：' + e.message + '（后端服务是否在运行？）';
+      } finally {
+        $('loading').classList.add('hidden');
+        btn.disabled = false;
+      }
+    }
+
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') ask(); });
+    input.focus();
+  </script>
+</body>
+</html>

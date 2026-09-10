@@ -1,0 +1,25 @@
+# 环境与密钥（绝不上传）
+.env
+.venv/
+venv/
+
+# 向量库生成的数据（本地可重建，不上传）
+chroma_db/
+
+# 沙箱临时目录（run_python 子进程的工作目录，本地生成）
+sandbox/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+
+# 日志
+*.log
