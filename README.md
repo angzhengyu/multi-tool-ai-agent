@@ -134,7 +134,9 @@ python main.py          # 端口 8001
 
 ## 11. Demo 截图
 
-_（此处放实际截图：网页提问界面 + 工具调用轨迹）_
+![前端界面与工具调用轨迹](assets/demo.png)
+
+> 截图展示：输入任务 → 得到回答 + **工具调用轨迹时间线**（`list_files` → `describe_csv` → `aggregate_csv`）
 
 ## 12. 工具清单
 
