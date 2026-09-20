@@ -8,8 +8,10 @@ Agent 的工具集
   get_current_time   取当前时间
   calculate          算数表达式（有字符白名单）
   list_files         列出项目里的文件
-  read_csv_preview   看 CSV 的列名 / 行数 / 前几行
-  run_python         执行 Python 代码（可用 pandas / numpy）做数据分析  ← 最"能干活"的工具
+  describe_csv       在本地探查 CSV 结构（列名/类型/缺失/数值列统计，**不返回明细行**）
+  aggregate_csv      在本地做分组聚合（分组/求和/平均/计数/排序取前 N，**只返回聚合结果**）
+  run_python         执行 Python 代码（可用 pandas / numpy）做数据分析
+                     ↑ 能力最强也最危险，**默认关闭**，需 ENABLE_RUN_PYTHON=1 开启
 """
 import os
 import re
@@ -254,4 +256,17 @@ def run_python(code: str, timeout: int = 15) -> str:
         out = "(代码执行完但没有输出，记得用 print 打印结果)"
     if len(out) > MAX_OUTPUT_CHARS:
         out = out[:MAX_OUTPUT_CHARS] + f"\n…（输出过长已截断，原始共 {len(out)} 字符）"
+
+    # ★ 相对路径踩坑提示（放在截断**之后**追加，保证它一定不会被截掉）
+    #   为什么需要：相对路径不会触发 _guard（它不是绝对路径），
+    #   所以模型拿到的只有一坨原生 traceback，完全不知道
+    #   是因为"代码跑在 sandbox/ 下、相对路径起点不对"。
+    if "FileNotFoundError" in out or "No such file or directory" in out:
+        out += (
+            "\n\n[提示] 这个 FileNotFoundError 很可能是**相对路径**引起的："
+            "本段代码的工作目录是 sandbox/，不是项目根目录，"
+            "所以 'data/xxx.csv' 会被解析成 'sandbox/data/xxx.csv'（不存在）。"
+            "读项目里的文件请用**绝对路径**：DATA_DIR + '/xxx.csv'，"
+            "其中 DATA_DIR 已在本段代码开头自动定义好，指向本项目的 data/ 目录。"
+        )
     return out

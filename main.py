@@ -4,7 +4,9 @@
 =====================================================
 Agent 主循环 + 工具集：模型自己决定调哪些工具、按什么顺序调。
 
-工具：get_current_time / calculate / list_files / read_csv_preview / run_python
+工具（与下方 TOOLS_SCHEMA 保持一致）：
+  get_current_time / calculate / list_files / describe_csv / aggregate_csv
+  （高危工具 run_python 默认不挂载，需设 ENABLE_RUN_PYTHON=1 开启）
 
 链路：
   用户提问 → 模型看"工具清单"自己决策
@@ -124,7 +126,16 @@ if os.getenv("ENABLE_RUN_PYTHON") == "1":
         "type": "function",
         "function": {
             "name": "run_python",
-            "description": "执行一段 Python 代码（可用 pandas）。⚠️ 高危工具，默认关闭。",
+            "description": (
+                "执行一段 Python 代码（可用 pandas / numpy），返回 print 的输出。"
+                "适合做**需要清洗或跨文件关联**的分析：比如把文本列转成数字、去重、"
+                "合并两个 CSV、多步派生指标。\n"
+                "★★ 读文件请务必用**绝对路径**：`pd.read_csv(DATA_DIR + '/xxx.csv')`。\n"
+                "   本段代码的工作目录是 sandbox/（不是项目根目录），"
+                "所以写相对路径 `data/xxx.csv` 会**找不到文件**；"
+                "`DATA_DIR` 已在代码开头自动定义好，指向本项目的 data/ 目录，"
+                "例如 `pd.read_csv(DATA_DIR + '/hard/orders_dirty.csv')`。"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {"code": {"type": "string", "description": "要执行的 Python 代码"}},

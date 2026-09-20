@@ -71,11 +71,26 @@ multi-tool-ai-agent/
 ├── main.py                  # FastAPI + Agent 主循环 + 工具注册
 ├── tools.py                 # 工具实现（含安全检查与沙箱执行）
 ├── data/
-│   └── sales.csv            # 示例销售数据（240 行，脚本生成的合成数据）
+│   ├── sales.csv            # 示例销售数据（240 行，脚本生成的合成数据）
+│   └── hard/
+│       ├── orders_dirty.csv # 难度探针用脏数据（270 行：重复/缺失/千分位文本/空格/混格式）
+│       └── products.csv     # 产品 → 类别/品牌 关联表（做类别统计必须 join 它）
+├── eval/                    # ★ 评测集与指标（见 §14.1）
+│   ├── gen_eval_set.py      # 生成主评测集（28 条，标准答案由 pandas 现算）
+│   ├── gen_hard_set.py      # 生成难度探针（12 条，含脏数据注入）
+│   ├── run_eval.py          # 真实跑批（调 run_agent，落盘轨迹与完整回答）
+│   ├── summarize.py         # 算指标（只读结果文件，不调 API）
+│   ├── scoring.py           # 判分规则（集中一处，可离线重新判分）
+│   ├── verify_sandbox_path.py  # 沙箱"能做什么/不能做什么"实测
+│   ├── verify_fix.py        # 缺陷 1 修复是否真的生效（4 项断言）
+│   ├── metrics_*.md         # 指标汇总表
+│   ├── results_*.json       # 原始结果（含每条轨迹，可逐题复查）
+│   └── 难度探针-缺陷报告.md  # 发现的 4 个缺陷 + 1 个我自己的标准答案 bug
 ├── static/
 │   └── index.html           # 前端页面（含工具调用轨迹展示）
 ├── tests/
 │   └── check_sandbox.py     # 沙箱与安全拦截的验证脚本
+├── sandbox/                 # run_python 子进程的工作目录（运行时生成）
 ├── generate_sample_data.py  # 合成数据生成脚本（固定随机种子，可复现）
 ├── requirements.txt
 ├── .env.example
@@ -90,6 +105,75 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
+### 7.1 进入虚拟环境（激活）
+
+本机的虚拟环境在**工作区根目录** `D:\AI-Career\.venv`（三个项目共用，不在本项目里）。
+**PowerShell**：
+
+```powershell
+D:\AI-Career\.venv\Scripts\Activate.ps1
+```
+
+激活成功后命令行提示符前面会出现 `(.venv)`。**进去之后 `python` 就是 venv 的解释器**，
+可以直接按 README 里的 `python xxx.py` 写法敲。
+
+**怎么确认自己真的进去了**（三条都要过）：
+
+```powershell
+(Get-Command python).Source                              # 应指向 D:\AI-Career\.venv\Scripts\python.exe
+python -c "import sys; print(sys.executable)"            # 同上
+python -c "import pandas; print(pandas.__version__)"     # 应有版本号（本机 3.0.5），不是报 ModuleNotFoundError
+```
+
+**退出**：`deactivate`
+
+**其它终端**：
+```cmd
+:: CMD
+D:\AI-Career\.venv\Scripts\activate.bat
+```
+```bash
+# Git Bash
+source /d/AI-Career/.venv/Scripts/activate
+```
+
+**报「禁止运行脚本 / cannot be loaded because running scripts is disabled」时**：
+本机 `CurrentUser` 策略已经是 `RemoteSigned`，正常不会遇到；若换机器遇到，用**最小改动**的方式：
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass   # 只对当前这个窗口生效，关掉就恢复
+D:\AI-Career\.venv\Scripts\Activate.ps1
+```
+
+**不想激活也行**：直接用解释器的完整路径（本 README 里 `$PY` 就是这个意思）：
+
+```powershell
+$PY = "D:\AI-Career\.venv\Scripts\python.exe"
+& $PY main.py
+```
+
+**★ 一个实测出来的坑：`py -3` 会绕过虚拟环境**
+
+| 激活后再敲 | 实际用的解释器 | 有 pandas 吗 |
+|---|---|---|
+| `python` | `D:\AI-Career\.venv\Scripts\python.exe` | ✅ 3.0.5 |
+| `py`（不带版本号） | `D:\AI-Career\.venv\Scripts\python.exe` | ✅ |
+| **`py -3`** | `C:\Users\...\pythoncore-3.14-64\python.exe`（系统 Python） | ❌ **没有** |
+
+所以**激活了也别用 `py -3`** —— 它会把虚拟环境整个跳过。
+
+> ### ⚠️ 解释器必须用**装了 pandas 的那个**（踩过坑，写在这里）
+>
+> **为什么必须强调**：`run_python` 是用 `sys.executable` 起子进程的，
+> 所以**启动 Agent 用哪个解释器，子进程就是哪个解释器**。
+> 如果用 `py -3`（系统 Python 3.14，没装 pandas）启动，
+> 主程序能跑（因为主程序只 `import` 了 openai/fastapi），
+> 但**每一次 `run_python` 都会 `ModuleNotFoundError: No module named 'pandas'`**，
+> 表现为"Agent 突然不会做数据清洗了"。排查顺序：先确认 `sys.executable` 里有 pandas。
+>
+> **注意：激活是「每个终端窗口各自生效」的**，新开一个窗口要重新激活。
+> 想省事可以把激活命令写进 PowerShell 配置文件（`notepad $PROFILE`），自行决定要不要。
+
 ## 8. 配置方法
 
 复制 `.env.example` 为 `.env`，填入：
@@ -103,8 +187,17 @@ DEEPSEEK_API_KEY=sk-你的密钥
 ## 9. 启动方式
 
 ```powershell
-python main.py          # 端口 8001
-# 或双击 run.bat（如已创建）
+# 方式一（推荐）：先激活虚拟环境，见 §7.1
+D:\AI-Career\.venv\Scripts\Activate.ps1
+python main.py                                  # 端口 8001
+# 需要高危工具时：$env:ENABLE_RUN_PYTHON='1'; python main.py
+```
+
+```powershell
+# 方式二：不激活，直接用完整路径
+$PY = "D:\AI-Career\.venv\Scripts\python.exe"   # 必须是有 pandas 的那个，见 §7
+& $PY main.py
+# 需要高危工具时：$env:ENABLE_RUN_PYTHON='1'; & $PY main.py
 ```
 - 网页：http://127.0.0.1:8001
 - 接口文档：http://127.0.0.1:8001/docs
@@ -184,7 +277,8 @@ python main.py          # 端口 8001
 
 ### 13.3 实测验证
 ```powershell
-python tests/check_sandbox.py
+$PY = "D:\AI-Career\.venv\Scripts\python.exe"
+& $PY tests/check_sandbox.py
 ```
 ```
 === 检查 run_python 的子进程环境变量 ===
@@ -207,7 +301,8 @@ python tests/check_sandbox.py
 ## 14. 测试
 
 ```powershell
-python tests/check_sandbox.py     # 验证沙箱隔离与安全拦截
+$PY = "D:\AI-Career\.venv\Scripts\python.exe"
+& $PY tests/check_sandbox.py       # 验证沙箱隔离与安全拦截
 ```
 
 功能测试建议：
@@ -215,15 +310,73 @@ python tests/check_sandbox.py     # 验证沙箱隔离与安全拦截
 - 数据分析（如「哪个地区销售额最高？」）→ 应调用 `describe_csv` + `aggregate_csv`
 - 越权请求（如让它读项目外的文件）→ 应被拒绝并给出安全替代方案
 
+### 14.1 评测集（`eval/`）—— 用真实跑批证明，而不是"我觉得它能行"
+
+```powershell
+$PY = "D:\AI-Career\.venv\Scripts\python.exe"
+& $PY eval/gen_eval_set.py     # 生成主评测集（28 条；标准答案由 pandas 现算）
+& $PY eval/gen_hard_set.py     # 生成难度探针（12 条脏数据任务）
+& $PY eval/run_eval.py         # 真实跑批（会真调 DeepSeek，约 2 分钟）
+& $PY eval/summarize.py        # 算指标（只读结果文件，不调 API，可反复重算）
+```
+
+**两套评测集的分工**：主评测集（干净数据）验"功能对不对"；
+难度探针（脏数据）验"边界顶不顶得住" —— 后者才是挤出水分的那一套。
+
+| | 主评测集 `eval_set.json` | 难度探针 `hard_set.json` |
+|---|---|---|
+| 数据 | `data/sales.csv`（240 行，干净） | `data/hard/orders_dirty.csv`（270 行，故意弄脏） |
+| 条数 | 28（单步 10 · 多步 12 · 容错 3 · 越权 3） | 12（重复/缺失/千分位文本/空格/混格式/跨文件关联） |
+| **任务完成率** | **100.0%（28/28）** | **91.7%（11/12）** |
+| 工具调用成功率 | 98.0%（49/50） | 100.0%（37/37） |
+| 平均完成轮数 | 2.50 | 3.50 |
+
+> 指标文件：`eval/metrics_run_v2.md`、`eval/metrics_hard_v2.md`；
+> 原始轨迹（可逐题复查）：`eval/results_run_v2.json`、`eval/results_hard_v2.json`。
+> **发现的 4 个真实缺陷 + 1 个我自己的标准答案 bug** 记在 `eval/难度探针-缺陷报告.md`。
+
+**★ 一个重要的方法论结论**：主评测集 28 条**全部通过**，却**一条缺陷都没暴露** ——
+因为干净数据根本不需要 `run_python`。把数据弄脏之后，**失败立刻集中在同一条链路上**
+（`run_python` 任务 **0/5**）。**评测集设计得够不够狠，直接决定能不能发现问题。**
+
+**修复效果（有明确归因，不是"重跑一次运气好了"）**：修 `run_python` 的路径缺陷
+（只改工具描述 + 加失败提示，**没放宽沙箱**）后，难度探针 **6/12 → 11/12**，
+`run_python` 链路 **0/5 → 8/9**；提升的 5 条**全部**是修复前卡在这条链路上的题。
+
+**诚实的局限**（必须写清，否则指标会骗人）：
+- 主评测集那 100% 是**干净数据**上的成绩，**不能单独引用**，必须和难度探针一起看；
+- 判分是"**必要不充分**"：只校验期望数字与关键词是否出现，**不能保证答案没有其他编造内容**；
+- **单次运行**，模型有随机性（temperature 未固定），**1~2 条的差异不宜当结论**；
+- 沙箱不是真沙箱，`_guard` 是黑名单，**理论上可被绕过**；
+- 端到端"安全"主要是**靠模型自己拒绝**，沙箱在端到端里其实**没被真正考验到** ——
+  要证明沙箱有效，得看**不经模型**的确定性单测（4/4 全拦截）。
+
 ## 15. Future Work
+
+### 15.1 评测已经指出来、但**还没修**的缺陷（优先级从高到低）
+
+> 这一节是**评测集跑出来的待办**，不是"想法清单" —— 每条都有可复现的证据。
+
+- [ ] **★ 兜底分支绕过 DSML 泄漏检查**（`main.py`）：到 `MAX_STEPS` 后"最后再问一次"
+      的兜底分支**直接返回原文**，没走 `_looks_like_tool_markup` 清洗 ⇒
+      回答里会漏出 `<｜DSML｜> calls>` 这类内部标记。**恰好是最需要兜底的场景反而最容易漏**。
+      （修法：兜底分支也过一次清洗，或干脆不再让模型自由生成、直接返回结构化说明。）
+- [ ] **`describe_csv` 掩盖脏数据**（`tools.py`）：它用 `to_numeric(errors="coerce")` 清洗**之后**
+      再报统计，还把 `object` 列标成"数值列" ⇒ 模型误以为可以直接算。
+      （修法：把"原始 dtype"和"可清洗成数值"分开写，例如「**文本列**，含 15 个千分位值」。）
+- [ ] **`aggregate_csv` 静默截断 `top_n`**：请求 270 名只返回前 50，**不说明被截断**。
+      （修法：返回里加一句「你请求 270 名，超过上限 50，已截断」。）
+
+### 15.2 其它
 
 - [ ] 更完善的真沙箱（容器 / gVisor 隔离）
 - [ ] 出域前自动脱敏（PII 掩码：姓名、学号、手机号）
 - [ ] Human-in-the-loop：高危操作需人工确认
 - [ ] 更多工具：SQL 工具、绘图、报告生成
 - [ ] 多轮会话 / 上下文管理（当前每次请求无状态）
-- [ ] 单元测试覆盖 + GitHub Actions
+- [ ] 单元测试覆盖 + GitHub Actions（把 `eval/run_eval.py` 的判分纳入 CI，防止改代码改坏指标）
 - [ ] Docker 化部署
+- [ ] 评测集扩到 100+ 条并固定温度，缩小置信区间（当前单次运行，1~2 条差异不可当结论）
 
 ---
 

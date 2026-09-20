@@ -1,0 +1,13 @@
+﻿id,dirt,question,expect_numbers,expect_texts
+H01,重复行,data/hard/orders_dirty.csv 一共有多少条数据行？（就是文件里有多少行数据，不去重）,270,
+H02,重复行,data/hard/orders_dirty.csv 里，「订单号」一共有多少个不重复的值？,260,
+H03,重复行,请把 data/hard/orders_dirty.csv 里**完全重复的行**去掉（所有字段都相同的行只保留一条），剩下多少条记录？,260,
+H04,缺失值,data/hard/orders_dirty.csv 的「数量」列里有多少个缺失值？,10,
+H05,缺失值,data/hard/orders_dirty.csv 的「单价」列里有多少个缺失值？,12,
+H06,缺失值,data/hard/orders_dirty.csv 的「数量」列总和是多少？（缺失值忽略不计）,5563,
+H07,数值是文本+千分位,"data/hard/orders_dirty.csv 的「单价」列最大值是多少？（注意这一列混着形如 2,599 的文本，要先转成数字再取最大值）",5899,
+H08,数值是文本+千分位,data/hard/orders_dirty.csv 的「单价」列平均值是多少？（先转成数字，缺失值忽略，保留两位小数）,1753.26,
+H09,文本带空格,data/hard/orders_dirty.csv 的「产品」列里，一共有多少种不同的产品？（注意部分取值首尾有多余空格，应当去掉空格后再统计）,8,
+H10,综合,在 data/hard/orders_dirty.csv 里，哪种产品的销售额（数量×单价）最高？金额是多少？（数量或单价缺失的行忽略不计）,2755311,手机
+H11,跨文件关联,data/hard/orders_dirty.csv 里没有「类别」列，请用 data/hard/products.csv 把「类别」关联进来，然后告诉我「外设」这个类别的销售额（数量×单价）合计是多少？（缺失值忽略，产品名首尾空格请先去掉，结果取整数）,1246336,外设
+H12,跨文件关联,同样把两个文件关联起来之后，哪个「类别」的销售额最高？金额是多少？（取整数）,4842055,电脑

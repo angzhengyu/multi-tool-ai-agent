@@ -1,0 +1,154 @@
+{
+  "meta": {
+    "purpose": "难度探针：在**脏数据**上考察数据清洗与边界条件处理能力",
+    "why": "主评测集是干净数据 → 28 条 100%，区分度不足；本集用来挤出水分",
+    "csv": "data/hard/orders_dirty.csv（+ data/hard/products.csv）",
+    "injected_dirt": {
+      "完全重复行": 10,
+      "数量缺失（实测，含重复行）": 10,
+      "单价缺失（实测）": 12,
+      "单价千分位文本": 15,
+      "产品名首尾空格": 12,
+      "日期混用 / 分隔": 60
+    },
+    "expected_traps": {
+      "不去重就会多算": "总行数 270 vs 唯一订单 260",
+      "直接对单价求最值会错": "单价列 dtype=object，必须先 to_numeric；正确最大值 5899",
+      "不 strip 产品名会把品种数算多": "正确品种数 8",
+      "不关联就答不出类别": "按产品最高是「手机」，按类别最高是「电脑」——两者不同，必须真做 join"
+    },
+    "total": 12,
+    "truth": {
+      "rows_all": 270,
+      "uniq_orders": 260,
+      "rows_dedup": 260,
+      "miss_qty": 10,
+      "miss_price": 12,
+      "qty_sum": 5563.0,
+      "price_max": 5899.0,
+      "price_mean": 1753.26,
+      "n_prod": 8,
+      "top_prod": "手机",
+      "top_prod_rev": 2755311,
+      "top_cat": "电脑",
+      "top_cat_rev": 4842055
+    },
+    "truth_note": "所有 expect_numbers 由 pandas 现算；每题判定规则写在题干里"
+  },
+  "tasks": [
+    {
+      "id": "H01",
+      "dirt": "重复行",
+      "question": "data/hard/orders_dirty.csv 一共有多少条数据行？（就是文件里有多少行数据，不去重）",
+      "expect_numbers": [
+        270
+      ],
+      "expect_texts": []
+    },
+    {
+      "id": "H02",
+      "dirt": "重复行",
+      "question": "data/hard/orders_dirty.csv 里，「订单号」一共有多少个不重复的值？",
+      "expect_numbers": [
+        260
+      ],
+      "expect_texts": []
+    },
+    {
+      "id": "H03",
+      "dirt": "重复行",
+      "question": "请把 data/hard/orders_dirty.csv 里**完全重复的行**去掉（所有字段都相同的行只保留一条），剩下多少条记录？",
+      "expect_numbers": [
+        260
+      ],
+      "expect_texts": []
+    },
+    {
+      "id": "H04",
+      "dirt": "缺失值",
+      "question": "data/hard/orders_dirty.csv 的「数量」列里有多少个缺失值？",
+      "expect_numbers": [
+        10
+      ],
+      "expect_texts": []
+    },
+    {
+      "id": "H05",
+      "dirt": "缺失值",
+      "question": "data/hard/orders_dirty.csv 的「单价」列里有多少个缺失值？",
+      "expect_numbers": [
+        12
+      ],
+      "expect_texts": []
+    },
+    {
+      "id": "H06",
+      "dirt": "缺失值",
+      "question": "data/hard/orders_dirty.csv 的「数量」列总和是多少？（缺失值忽略不计）",
+      "expect_numbers": [
+        5563
+      ],
+      "expect_texts": []
+    },
+    {
+      "id": "H07",
+      "dirt": "数值是文本+千分位",
+      "question": "data/hard/orders_dirty.csv 的「单价」列最大值是多少？（注意这一列混着形如 2,599 的文本，要先转成数字再取最大值）",
+      "expect_numbers": [
+        5899
+      ],
+      "expect_texts": []
+    },
+    {
+      "id": "H08",
+      "dirt": "数值是文本+千分位",
+      "question": "data/hard/orders_dirty.csv 的「单价」列平均值是多少？（先转成数字，缺失值忽略，保留两位小数）",
+      "expect_numbers": [
+        1753.26
+      ],
+      "expect_texts": []
+    },
+    {
+      "id": "H09",
+      "dirt": "文本带空格",
+      "question": "data/hard/orders_dirty.csv 的「产品」列里，一共有多少种不同的产品？（注意部分取值首尾有多余空格，应当去掉空格后再统计）",
+      "expect_numbers": [
+        8
+      ],
+      "expect_texts": []
+    },
+    {
+      "id": "H10",
+      "dirt": "综合",
+      "question": "在 data/hard/orders_dirty.csv 里，哪种产品的销售额（数量×单价）最高？金额是多少？（数量或单价缺失的行忽略不计）",
+      "expect_numbers": [
+        2755311
+      ],
+      "expect_texts": [
+        "手机"
+      ]
+    },
+    {
+      "id": "H11",
+      "dirt": "跨文件关联",
+      "question": "data/hard/orders_dirty.csv 里没有「类别」列，请用 data/hard/products.csv 把「类别」关联进来，然后告诉我「外设」这个类别的销售额（数量×单价）合计是多少？（缺失值忽略，产品名首尾空格请先去掉，结果取整数）",
+      "expect_numbers": [
+        1246336
+      ],
+      "expect_texts": [
+        "外设"
+      ]
+    },
+    {
+      "id": "H12",
+      "dirt": "跨文件关联",
+      "question": "同样把两个文件关联起来之后，哪个「类别」的销售额最高？金额是多少？（取整数）",
+      "expect_numbers": [
+        4842055
+      ],
+      "expect_texts": [
+        "电脑"
+      ]
+    }
+  ]
+}
