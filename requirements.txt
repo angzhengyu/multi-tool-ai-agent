@@ -1,5 +1,10 @@
+# 运行项目真正需要的依赖
 fastapi
 uvicorn
 python-dotenv
 openai
-pandas
+pandas          # describe_csv / aggregate_csv / run_python 都靠它读表
+openpyxl        # read_excel 靠它读 .xlsx（财务勾稽模式必需）—— 之前漏写了
+numpy           # eval/gen_hard_set.py 直接 import；pandas 会带它，但仍显式声明
+pydantic        # main.py:29 `from pydantic import BaseModel`，是运行时直接依赖
+                # （fastapi 会连带装上，但直接 import 的包不该靠别人带 —— 之前漏写了）

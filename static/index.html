@@ -1,234 +1,600 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>多工具 AI Agent</title>
-  <style>
-    :root {
-      --bg: #f5f7fb;
-      --card: #ffffff;
-      --text: #1f2733;
-      --muted: #8b95a5;
-      --line: #e8ecf3;
-      --primary: #6b4bff;
-      --primary-weak: #efeaff;
-      --code-bg: #f7f8fb;
-      --radius: 14px;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
-      font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
-      display: flex; justify-content: center; padding: 48px 16px;
-    }
-    .wrap { width: 100%; max-width: 760px; }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多工具 AI Agent</title>
+<style>
+/* ============================================================
+   视觉语言：**账本**
+   这个 Agent 干的是财务表的活（指标计算 / 三表勾稽），所以界面借用账本本身的语言：
+   表格数字对齐、发丝级分割线、口径声明、行列分明的轨迹。
+   不是为了"科技感"做装饰，是让形状说出它是干什么的。
 
-    header { text-align: center; margin-bottom: 26px; }
-    header .logo {
-      width: 46px; height: 46px; margin: 0 auto 12px; background: var(--primary);
-      border-radius: 14px; display: flex; align-items: center; justify-content: center;
-      color: #fff; font-size: 22px;
-    }
-    header h1 { font-size: 21px; margin: 0 0 6px; font-weight: 600; }
-    header p { margin: 0; color: var(--muted); font-size: 13px; }
+   间距：4 单位基数　字号：固定 rem 阶梯　模式：Operate（可扫读 > 表达）
+   ============================================================ */
+:root{
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:20px;
+  --s6:24px; --s7:32px; --s8:40px; --s9:56px;
 
-    .search {
-      background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
-      padding: 8px 8px 8px 16px; display: flex; align-items: center; gap: 8px;
-      box-shadow: 0 2px 10px rgba(31, 39, 51, .04);
-    }
-    .search input { flex: 1; border: none; outline: none; background: transparent; font-size: 15px; padding: 10px 0; color: var(--text); }
-    .search input::placeholder { color: #b3bbc8; }
-    .search button {
-      border: none; background: var(--primary); color: #fff; padding: 11px 20px;
-      border-radius: 10px; font-size: 14px; cursor: pointer; white-space: nowrap; transition: .15s;
-    }
-    .search button:hover:not(:disabled) { background: #5a3ae6; }
-    .search button:disabled { background: #c3b6f5; cursor: default; }
+  --ink:#101828;        /* 正文与标题 */
+  --ink-2:#475467;      /* 次级 */
+  --ink-3:#5d6b82;      /* 弱化：对白 5.39:1 */
+  --line:#e4e7ec;       /* 发丝线 */
+  --line-2:#d0d5dd;
 
-    .examples { margin: 12px 2px 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-    .examples > span { color: var(--muted); font-size: 12.5px; }
-    .chip {
-      border: 1px solid var(--line); background: #fff; color: #55617a; font-size: 12.5px;
-      padding: 5px 11px; border-radius: 999px; cursor: pointer; transition: .15s;
-    }
-    .chip:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-weak); }
+  --surface:#ffffff;
+  --surface-2:#f7f8fa;  /* 第二层：侧栏 / 引用块 */
+  --surface-3:#eef0f4;
 
-    .card {
-      margin-top: 22px; background: var(--card); border: 1px solid var(--line);
-      border-radius: var(--radius); padding: 20px;
-      box-shadow: 0 2px 10px rgba(31, 39, 51, .04); animation: in .18s ease-out;
-    }
-    @keyframes in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  --accent:#3538cd;     /* 单一强调色：压白字 8.08:1 */
+  --accent-ink:#3538cd; /* 浅底上的强调文字，同值也够 */
+  --accent-weak:#eef0ff;
 
-    .label { font-size: 12px; color: var(--muted); letter-spacing: .04em; margin-bottom: 8px; }
-    .answer { font-size: 15.5px; line-height: 1.75; white-space: pre-wrap; word-break: break-word; }
-    .divider { height: 1px; background: var(--line); margin: 16px 0; }
+  /* 语义色只用于判定结果，不当装饰 */
+  --ok:#067647; --ok-weak:#ecfdf3;
+  --warn:#b54708; --warn-weak:#fffaeb;
+  --danger:#b42318; --danger-weak:#fef3f2;
 
-    /* 工具调用轨迹 */
-    .trace-head { display: flex; align-items: center; gap: 8px; }
-    .tag {
-      background: var(--primary-weak); color: var(--primary); padding: 2px 9px;
-      border-radius: 999px; font-size: 12px; font-weight: 500;
-    }
-    .trace { margin-top: 12px; }
-    .step {
-      position: relative; padding: 0 0 16px 30px; border-left: 2px solid var(--line);
-      margin-left: 9px; animation: in .18s ease-out;
-    }
-    .step:last-child { border-left-color: transparent; padding-bottom: 0; }
-    .step .dot {
-      position: absolute; left: -11px; top: -2px; width: 20px; height: 20px; border-radius: 50%;
-      background: var(--primary-weak); color: var(--primary); font-size: 11.5px; font-weight: 600;
-      display: flex; align-items: center; justify-content: center;
-    }
-    .step .tool { font-size: 13.5px; font-weight: 600; color: var(--text); }
-    .kv { margin-top: 7px; font-size: 12.5px; }
-    .kv .k { color: var(--muted); margin-right: 6px; }
-    code {
-      background: var(--code-bg); border: 1px solid var(--line); border-radius: 6px;
-      padding: 2px 6px; font-family: ui-monospace, Consolas, monospace; font-size: 12px;
-      color: #445069; word-break: break-all;
-    }
-    pre {
-      margin: 6px 0 0; background: var(--code-bg); border: 1px solid var(--line);
-      border-radius: 8px; padding: 10px 12px; font-family: ui-monospace, Consolas, monospace;
-      font-size: 12px; line-height: 1.6; color: #445069; white-space: pre-wrap;
-      word-break: break-word; max-height: 220px; overflow: auto;
-    }
+  --r-sm:6px; --r:10px; --r-lg:14px;
+  --shadow:0 1px 2px rgba(16,24,40,.05), 0 8px 24px -14px rgba(16,24,40,.18);
+  --ease:cubic-bezier(.16,1,.3,1);
+}
+*,*::before,*::after{ box-sizing:border-box; }
+body{
+  margin:0; background:var(--surface-2); color:var(--ink);
+  font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;
+  font-size:15px; line-height:1.65;
+  caret-color:var(--accent);
+  scrollbar-color:var(--line-2) transparent;
+}
+::selection{ background:#d9dcff; color:var(--ink); }
+:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; border-radius:var(--r-sm); }
 
-    .loading { margin-top: 22px; color: var(--muted); font-size: 14px; display: flex; align-items: center; gap: 9px; }
-    .spinner {
-      width: 15px; height: 15px; border: 2px solid var(--line); border-top-color: var(--primary);
-      border-radius: 50%; animation: spin .7s linear infinite;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .note { margin-top: 12px; font-size: 12.5px; color: #b06a00; background: #fff8e6; border: 1px solid #ffe2a8; padding: 8px 10px; border-radius: 8px; }
-    .err { margin-top: 18px; color: #d93a3a; font-size: 14px; }
-    .hidden { display: none !important; }
-    footer { text-align: center; color: #b3bbc8; font-size: 12px; margin-top: 30px; }
-  </style>
+/* 数字一律等宽对齐 —— 账本的底线，也是最便宜的"这页被做出来过"的信号 */
+.num{ font-variant-numeric:tabular-nums; font-feature-settings:"tnum" 1; }
+
+.skip{ position:absolute; left:-9999px; }
+.skip:focus{ left:var(--s4); top:var(--s4); z-index:30; background:var(--surface);
+  color:var(--accent-ink); padding:var(--s2) var(--s4); border-radius:var(--r-sm); box-shadow:var(--shadow); }
+
+/* ---------- 顶栏 ---------- */
+.bar{ background:var(--surface); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:10; }
+.bar-in{ max-width:1200px; margin:0 auto; padding:var(--s4) var(--s6);
+  display:flex; align-items:center; gap:var(--s4); flex-wrap:wrap; }
+.brand{ display:flex; align-items:center; gap:var(--s3); min-width:0; }
+.mark{ flex:none; color:var(--accent); display:block; }
+.brand-txt strong{ display:block; font-size:16px; font-weight:650; letter-spacing:-.01em; }
+.brand-txt span{ display:block; font-size:12.5px; color:var(--ink-3); line-height:1.45; }
+
+.chips{ margin-left:auto; display:flex; gap:var(--s2); flex-wrap:wrap; }
+.pill{ display:inline-flex; align-items:center; gap:var(--s2); font-size:12.5px; color:var(--ink-2);
+  background:var(--surface-2); border:1px solid var(--line); padding:5px var(--s3); border-radius:999px;
+  white-space:nowrap; }
+.pill b{ color:var(--ink); font-weight:650; }
+.pill.hot{ background:var(--accent-weak); border-color:#d9dcff; color:var(--accent-ink); }
+.pill.hot b{ color:var(--accent-ink); }
+.dot{ width:7px; height:7px; border-radius:50%; background:var(--line-2); flex:none; }
+.dot.on{ background:var(--ok); }
+.dot.off{ background:var(--danger); }
+
+/* ---------- 骨架：主栏 + 侧栏 ---------- */
+.shell{ max-width:1200px; margin:0 auto; padding:var(--s8) var(--s6) var(--s9);
+  display:grid; grid-template-columns:minmax(0,1fr) 320px; gap:var(--s8); align-items:start; }
+main{ min-width:0; }
+
+/* ---------- 提问 ---------- */
+.ask-label{ display:block; font-size:13px; font-weight:600; color:var(--ink-2); margin-bottom:var(--s2); }
+.ask{ display:flex; gap:var(--s2); background:var(--surface); border:1px solid var(--line-2);
+  border-radius:var(--r); padding:var(--s2); box-shadow:var(--shadow);
+  transition:border-color .18s var(--ease), box-shadow .18s var(--ease); }
+.ask:focus-within{ border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-weak), var(--shadow); }
+.ask input{ flex:1; min-width:0; border:0; outline:0; background:transparent; font:inherit;
+  font-size:15.5px; color:var(--ink); padding:var(--s3); border-radius:var(--r-sm); }
+.ask input::placeholder{ color:var(--ink-3); }
+.ask button{ flex:none; border:0; border-radius:var(--r-sm); background:var(--accent); color:#fff;
+  font:inherit; font-size:14.5px; font-weight:600; padding:0 var(--s6); cursor:pointer; min-height:44px;
+  transition:background-color .16s var(--ease); }
+.ask button:hover:not(:disabled){ background:#2a2da8; }
+.ask button:active:not(:disabled){ background:#23268f; }
+.ask button:disabled{ background:var(--surface-3); color:var(--ink-3); cursor:not-allowed; }
+.hint{ margin:var(--s2) 0 0; font-size:12.5px; color:var(--ink-3); }
+
+/* ---------- 示例：按「能力」分组，让访客看清它会哪几手 ---------- */
+.samples{ margin-top:var(--s6); display:grid; gap:var(--s3); }
+.srow{ display:flex; gap:var(--s2); align-items:baseline; flex-wrap:wrap; }
+.srow > b{ flex:none; min-width:88px; font-size:12.5px; font-weight:650; color:var(--ink-2); }
+.chip{ font:inherit; font-size:12.5px; color:var(--ink-2); background:var(--surface);
+  border:1px solid var(--line-2); padding:5px 11px; border-radius:999px; cursor:pointer;
+  transition:border-color .16s var(--ease), color .16s var(--ease), background-color .16s var(--ease); }
+.chip:hover{ border-color:var(--accent); color:var(--accent-ink); background:var(--accent-weak); }
+
+/* ---------- 状态区 ---------- */
+.stream{ margin-top:var(--s7); }
+.state{ animation:rise .2s var(--ease); }
+@keyframes rise{ from{ opacity:0; transform:translateY(6px); } to{ opacity:1; transform:none; } }
+.hidden{ display:none !important; }
+.panel{ background:var(--surface); border:1px solid var(--line); border-radius:var(--r-lg); padding:var(--s6); }
+.slabel{ font-size:12px; font-weight:650; letter-spacing:.05em; color:var(--ink-3); margin:0 0 var(--s3); }
+
+/* 教学式空状态 */
+.teach h2{ margin:0 0 var(--s3); font-size:19px; font-weight:650; letter-spacing:-.01em; }
+.teach > p{ margin:0 0 var(--s5); color:var(--ink-2); max-width:64ch; }
+.abilities{ margin:0; display:grid; gap:var(--s3); }
+.ability{ display:grid; grid-template-columns:auto 1fr; gap:var(--s3); align-items:start;
+  padding-top:var(--s3); border-top:1px solid var(--line); }
+.ability .n{ font-size:12px; font-weight:650; color:var(--accent-ink); background:var(--accent-weak);
+  width:22px; height:22px; border-radius:var(--r-sm); display:grid; place-items:center; }
+.ability strong{ display:block; font-size:14.5px; font-weight:650; }
+.ability span{ display:block; font-size:13px; color:var(--ink-2); }
+
+/* 骨架屏（不用内容中间的转圈） */
+.sk{ background:linear-gradient(90deg,var(--surface-3) 25%,#f4f6f9 37%,var(--surface-3) 63%);
+  background-size:400% 100%; animation:shim 1.3s linear infinite; border-radius:5px; }
+@keyframes shim{ from{ background-position:100% 0 } to{ background-position:0 0 } }
+.sk-l{ height:12px; margin-bottom:var(--s3); }
+.sk-l:nth-child(1){ width:90% } .sk-l:nth-child(2){ width:74% }
+.sk-l:nth-child(3){ width:82% } .sk-l:nth-child(4){ width:38% }
+.load-note{ margin:var(--s4) 0 0; font-size:12.5px; color:var(--ink-3); }
+
+/* 回答 */
+.answer{ font-size:15.5px; line-height:1.78; word-break:break-word; }
+.answer p{ margin:0 0 var(--s4); }
+.answer p:last-child{ margin-bottom:0; }
+.answer ul,.answer ol{ margin:0 0 var(--s4); padding-left:var(--s5); }
+.answer li{ margin-bottom:var(--s2); }
+.answer strong{ font-weight:650; }
+.answer code{ font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:.9em;
+  background:var(--surface-2); border:1px solid var(--line); padding:1px 5px; border-radius:4px; }
+.answer h3{ font-size:15.5px; font-weight:650; margin:var(--s5) 0 var(--s3); }
+.answer h3:first-child{ margin-top:0; }
+/* ★ 表格要真的渲染出来（账本题材里表格就是正文，不能把 markdown 竖线原样吐给用户） */
+.tbl{ width:100%; overflow-x:auto; margin:0 0 var(--s4); }
+.answer table{ border-collapse:collapse; width:100%; font-size:13.5px; }
+.answer th,.answer td{ padding:7px var(--s3); border-bottom:1px solid var(--line); text-align:left; }
+.answer th{ font-weight:650; color:var(--ink-2); border-bottom:1px solid var(--line-2);
+  background:var(--surface-2); white-space:nowrap; }
+.answer td{ font-variant-numeric:tabular-nums; }
+.answer tr:last-child td{ border-bottom:0; }
+
+/* 口径声明：账本式的"这批数是什么口径" */
+.declare{ margin:var(--s5) 0 0; padding:var(--s3) var(--s4); background:var(--surface-2);
+  border-radius:var(--r-sm); display:flex; gap:var(--s5); flex-wrap:wrap; font-size:12.5px; color:var(--ink-3); }
+.declare div b{ display:block; font-size:15px; font-weight:650; color:var(--ink);
+  font-variant-numeric:tabular-nums; }
+.declare div.hot b{ color:var(--accent-ink); font-size:13.5px; }
+
+/* 工具轨迹：账本的行 */
+.trace-wrap{ margin-top:var(--s5); border-top:1px solid var(--line); padding-top:var(--s4); }
+.trace{ display:grid; }
+.trow{ display:grid; grid-template-columns:26px 132px 1fr; gap:var(--s3); align-items:baseline;
+  padding:7px 0; border-bottom:1px solid var(--line); font-size:13px; }
+.trow:last-child{ border-bottom:0; }
+.trow .i{ color:var(--ink-3); font-size:12px; font-variant-numeric:tabular-nums; }
+.trow .t{ font-weight:650; color:var(--ink); }
+.trow .t.correct{ color:var(--warn); }
+.trow .t.none{ color:var(--ink-3); font-weight:400; }
+.trow .r{ color:var(--ink-2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.trow .r code{ font-family:ui-monospace,Consolas,monospace; font-size:12.5px; color:var(--ink-3); }
+.note{ margin:var(--s3) 0 0; padding:var(--s2) var(--s3); background:var(--warn-weak); color:var(--warn);
+  border-radius:var(--r-sm); font-size:12.5px; }
+
+/* 报错：说清发生了什么 / 为什么 / 下一步 */
+.note-bad{ display:flex; gap:var(--s4); align-items:flex-start; }
+.note-bad .badge{ flex:none; width:34px; height:34px; border-radius:var(--r-sm);
+  display:grid; place-items:center; background:var(--danger-weak); color:var(--danger); }
+.note-bad h2{ margin:0 0 var(--s2); font-size:16.5px; font-weight:650; }
+.note-bad p{ margin:0 0 var(--s2); color:var(--ink-2); max-width:62ch; }
+.note-bad p:last-child{ margin-bottom:0; }
+.note-bad code{ font-family:ui-monospace,Consolas,monospace; font-size:.9em;
+  background:var(--surface-2); border:1px solid var(--line); padding:1px 5px; border-radius:4px; }
+
+/* ---------- 侧栏 ---------- */
+aside{ min-width:0; }
+.block{ background:var(--surface); border:1px solid var(--line); border-radius:var(--r-lg); overflow:hidden; }
+.block + .block{ margin-top:var(--s4); }
+.bhead{ padding:var(--s4) var(--s5); border-bottom:1px solid var(--line); display:flex;
+  align-items:baseline; gap:var(--s2); }
+.bhead h2{ margin:0; font-size:13.5px; font-weight:650; }
+.bhead span{ margin-left:auto; font-size:12.5px; color:var(--ink-3); }
+.bbody{ padding:var(--s4) var(--s5) var(--s5); }
+.ledger{ margin:0; display:grid; gap:var(--s2); }
+.ledger div{ display:flex; align-items:baseline; gap:var(--s3); font-size:13px; }
+.ledger dt{ color:var(--ink-3); flex:none; }
+.ledger dd{ margin:0 0 0 auto; text-align:right; color:var(--ink); font-variant-numeric:tabular-nums; }
+.ledger dd small{ display:block; color:var(--ink-3); font-size:11.5px; font-weight:400; }
+.files{ margin:0; padding:0; list-style:none; border-top:1px solid var(--line); max-height:280px; overflow:auto; }
+.files li{ display:flex; align-items:baseline; gap:var(--s2); padding:7px var(--s5);
+  font-size:12.5px; color:var(--ink-2); border-bottom:1px solid var(--line); }
+.files li:last-child{ border-bottom:0; }
+.files .nm{ min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  font-family:ui-monospace,Consolas,monospace; font-size:12px; }
+.files .meta{ margin-left:auto; color:var(--ink-3); font-size:11.5px; flex:none;
+  font-variant-numeric:tabular-nums; }
+.side-note{ margin:var(--s4) 0 0; font-size:12.5px; color:var(--ink-3); line-height:1.6; }
+.side-note b{ color:var(--ink-2); }
+.side-note code{ font-family:ui-monospace,Consolas,monospace; background:var(--surface-2);
+  border:1px solid var(--line); padding:1px 4px; border-radius:4px; }
+footer{ max-width:1200px; margin:0 auto; padding:0 var(--s6) var(--s8); color:var(--ink-3); font-size:12.5px; }
+
+/* ---------- 响应式：结构变化，不是流体字号 ---------- */
+@media (max-width:960px){
+  .shell{ grid-template-columns:minmax(0,1fr); gap:var(--s7); padding-top:var(--s7); }
+  .bar-in{ padding:var(--s3) var(--s4); }
+  .chips{ margin-left:0; flex-basis:100%; }
+  .shell,footer{ padding-left:var(--s4); padding-right:var(--s4); }
+  .files{ max-height:none; }
+}
+@media (max-width:560px){
+  .ask{ flex-direction:column; }
+  .ask button{ padding:var(--s3) var(--s4); }
+  .srow > b{ min-width:100%; }
+  .panel{ padding:var(--s5) var(--s4); }
+  .trow{ grid-template-columns:22px 1fr; }
+  .trow .r{ grid-column:2; white-space:normal; }
+  .bbody,.bhead,.files li{ padding-left:var(--s4); padding-right:var(--s4); }
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{ animation-duration:.01ms !important; animation-iteration-count:1 !important;
+    transition-duration:.01ms !important; }
+}
+</style>
 </head>
 <body>
-  <div class="wrap">
-    <header>
-      <div class="logo">⚙</div>
-      <h1>多工具 AI Agent</h1>
-      <p>自己决定调用哪些工具来完成你的任务</p>
-    </header>
 
-    <div class="search">
-      <input id="q" placeholder="给 Agent 一个任务，例如：读一下 data/sales.csv，告诉我销售额最高的三个产品" autocomplete="off" />
-      <button id="btn" onclick="ask()">执行</button>
-    </div>
+<a class="skip" href="#q">跳到提问框</a>
 
-    <div class="examples">
-      <span>试试：</span>
-      <div class="chip" onclick="askExample(this)">读一下 data/sales.csv，告诉我销售额最高的三个产品</div>
-      <div class="chip" onclick="askExample(this)">哪个地区的销售额最高？</div>
-      <div class="chip" onclick="askExample(this)">现在几点了</div>
-      <div class="chip" onclick="askExample(this)">123*456 等于多少</div>
-    </div>
-
-    <div id="loading" class="loading hidden">
-      <div class="spinner"></div><span>Agent 正在思考并调用工具…（可能需要十几秒）</span>
-    </div>
-
-    <div id="out" class="card hidden">
-      <div class="label">回答</div>
-      <div class="answer" id="answer"></div>
-      <div class="divider"></div>
-      <div class="trace-head">
-        <div class="label" style="margin:0">工具调用轨迹</div>
-        <span class="tag" id="steps"></span>
+<header class="bar">
+  <div class="bar-in">
+    <div class="brand">
+      <!-- 自绘 SVG：账本栅格，不用 Unicode 符号冒充图标 -->
+      <svg class="mark" width="34" height="34" viewBox="0 0 34 34" fill="none" aria-hidden="true">
+        <rect x="4.5" y="5.5" width="25" height="23" rx="4" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M4.5 12.5h25M13 12.5v16M4.5 19.5h25" stroke="currentColor" stroke-width="1.4"/>
+        <path d="M16.5 16h9M16.5 23h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+      <div class="brand-txt">
+        <strong>多工具 AI Agent</strong>
+        <span>自己决定调哪个工具 · 报错回喂自纠 · 数据不出域</span>
       </div>
-      <div id="trace" class="trace"></div>
-      <div id="note" class="note hidden"></div>
+    </div>
+    <div class="chips">
+      <span class="pill hot" id="pill-mode"><b>…</b></span>
+      <span class="pill"><span class="dot" id="dot"></span><span id="pill-state">连接中…</span></span>
+    </div>
+  </div>
+</header>
+
+<div class="shell">
+  <main>
+    <label class="ask-label" for="q">交给 Agent 一个任务</label>
+    <form class="ask" id="form" autocomplete="off">
+      <input id="q" name="q" type="text"
+             placeholder="例如：data/tesla/tesla_financials.csv 里 2014 年毛利率是多少？"
+             aria-describedby="hint">
+      <button id="btn" type="submit">执行</button>
+    </form>
+    <p class="hint" id="hint">回车提交。模型自主决定调哪几个工具、调几次；工具报错会当作结果回喂给它自己纠正，所以偶尔慢一点，但不容易崩。</p>
+
+    <div class="samples" id="samples">
+      <div class="srow">
+        <b>财务指标</b>
+        <button class="chip" type="button" data-q="data/tesla/tesla_financials.csv 里 2014 年毛利率是多少？">2014 年毛利率</button>
+        <button class="chip" type="button" data-q="data/tesla/tesla_financials.csv 里，特斯拉哪一年首次实现全年净利润为正？当年净利润是多少百万美元？">哪年首次盈利</button>
+        <button class="chip" type="button" data-q="data/tesla/tesla_financials.csv 里 2014 到 2024 这十一年，净利润合计多少百万美元？">十一年净利合计</button>
+      </div>
+      <div class="srow">
+        <b>三表勾稽</b>
+        <button class="chip" type="button" data-q="请对 data/fin/sample_fin.xlsx 做财务报表勾稽校验，按 C01-C12 清单逐条给出结论，未通过的给出单元格位置和量化差异。">对样本工作簿做勾稽</button>
+        <button class="chip" type="button" data-q="data/fin/sample_fin.xlsx 的资产负债表平衡吗？资产总计是多少？">资产负债表平衡吗</button>
+      </div>
+      <div class="srow">
+        <b>CSV 分析</b>
+        <button class="chip" type="button" data-q="data/sales.csv 里哪个地区的销售额最高？">哪个地区销售额最高</button>
+        <button class="chip" type="button" data-q="data/hard/orders_dirty.csv 一共有多少条数据行？">脏表有多少行</button>
+        <button class="chip" type="button" data-q="123*456 等于多少？">123*456</button>
+      </div>
     </div>
 
-    <div id="err" class="err"></div>
+    <div class="stream">
 
-    <footer>Function Calling · 工具调用 · 错误容错 · FastAPI</footer>
-  </div>
+      <!-- 初始：教学式空状态（说清它能干哪几手） -->
+      <section class="state" id="st-empty">
+        <div class="panel teach">
+          <h2>这个 Agent 会哪几手</h2>
+          <p>它不写死流程：拿到任务后自己决定先用哪个工具、看什么、再怎么算。
+             下面三块是它现在真正能做的事 —— 上面的示例按钮点下去就能跑。</p>
+          <div class="abilities">
+            <div class="ability"><div class="n">1</div><div>
+              <strong>财务指标计算</strong>
+              <span>对真实财报算毛利率 / 净利率 / 营业利润率、累计与极值。数据取自 SEC 官方 XBRL 接口。</span>
+            </div></div>
+            <div class="ability"><div class="n">2</div><div>
+              <strong>三表勾稽校验</strong>
+              <span>解析工作簿的公式与缓存值（双通道），按 C01–C12 清单逐条判定；未通过的要给出单元格位置与量化差异。</span>
+            </div></div>
+            <div class="ability"><div class="n">3</div><div>
+              <strong>脏表清洗与分析</strong>
+              <span>重复行、缺失值、千分位文本、单位混用、首尾空格 —— 先清洗再统计，并说明怎么清洗的。</span>
+            </div></div>
+          </div>
+        </div>
+      </section>
 
-  <script>
-    const $ = id => document.getElementById(id);
-    const btn = $('btn'), input = $('q'), errEl = $('err');
+      <!-- 加载：骨架屏 -->
+      <section class="state hidden" id="st-loading">
+        <div class="panel">
+          <p class="slabel">模型正在决策</p>
+          <div class="sk sk-l"></div><div class="sk sk-l"></div>
+          <div class="sk sk-l"></div><div class="sk sk-l"></div>
+          <p class="load-note" id="load-note">正在决定调用哪些工具…</p>
+        </div>
+      </section>
 
-    // 工具返回的内容要转义，避免把内容当成 HTML 执行（XSS）
-    function esc(s) {
-      return String(s == null ? '' : s)
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+      <!-- 命中 -->
+      <section class="state hidden" id="st-answer">
+        <div class="panel">
+          <p class="slabel">回答</p>
+          <div class="answer" id="answer"></div>
+          <div class="declare">
+            <div>工具调用 <b id="d-steps">—</b></div>
+            <div>用时 <b id="d-secs">—</b></div>
+            <div class="hot">数据来源 <b id="d-src">—</b></div>
+          </div>
+          <div class="trace-wrap">
+            <p class="slabel">工具调用轨迹</p>
+            <div class="trace" id="trace"></div>
+            <div id="note" class="note hidden"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 请求失败 -->
+      <section class="state hidden" id="st-error">
+        <div class="panel">
+          <div class="note-bad">
+            <div class="badge" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
+                <circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.6"/>
+                <path d="M10 6.2v4.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                <circle cx="10" cy="13.6" r=".95" fill="currentColor"/>
+              </svg>
+            </div>
+            <div>
+              <h2>没能连上后端服务</h2>
+              <p>请求 <code>/agent</code> 失败：<span id="err-msg">—</span></p>
+              <p>确认服务在运行（<code>run.bat</code> 或 <code>python main.py</code>），默认监听
+                 <code>127.0.0.1:8001</code>。若启动时打印了「依赖缺失」告警，按告警里的命令补装即可。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <aside>
+    <section class="block">
+      <div class="bhead"><h2>当前运行态</h2></div>
+      <div class="bbody">
+        <dl class="ledger" id="spec"></dl>
+        <p class="side-note">这些值来自后端 <code>/health</code>，不是前端写死的。
+           改 <code>AGENT_MODE</code> 或调 <code>MAX_STEPS</code> 并重启后，这里会跟着变。</p>
+      </div>
+    </section>
+
+    <section class="block">
+      <div class="bhead"><h2>数据资产</h2><span id="assets-total">—</span></div>
+      <ul class="files" id="files"></ul>
+      <div class="bbody" style="padding-top:0">
+        <p class="side-note">清单来自后端 <code>/assets</code>：往 <b>data/</b> 放一个新文件，
+           刷新页面就会多一行。</p>
+      </div>
+    </section>
+
+    <section class="block">
+      <div class="bhead"><h2>已挂载工具</h2><span id="tools-count">—</span></div>
+      <div class="bbody">
+        <p class="side-note" id="tools-list" style="margin-top:0">—</p>
+        <p class="side-note"><b>能力分层</b>：日常分析用受限原语（列目录 / 看结构 / 读工作簿 / 分组聚合）；
+           高危的代码执行默认关闭，开启后也跑在独立子进程里，拿不到任何 API Key。</p>
+      </div>
+    </section>
+  </aside>
+</div>
+
+<footer>
+  Function Calling · 工具调用 · 错误回喂自纠 · 子进程沙箱 · FastAPI
+  　｜　数据来源以回答上方的「数据来源」标注为准
+</footer>
+
+<script>
+(function () {
+  'use strict';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var form = $('form'), input = $('q'), btn = $('btn');
+  var STATES = ['st-empty', 'st-loading', 'st-answer', 'st-error'];
+
+  function show(which) {
+    STATES.forEach(function (id) { $(id).classList.toggle('hidden', id !== which); });
+  }
+  function esc(s) {
+    return String(s === null || s === undefined ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  /* ---------- 轻量 markdown → HTML（模型输出的是 markdown，而且很爱用表格） ---------- */
+  function inline(s) {
+    return s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+            .replace(/`([^`]+)`/g, '<code>$1</code>');
+  }
+  function isRow(l) { return /^\s*\|.*\|\s*$/.test(l); }
+  function isSep(l) { return /^\s*\|[\s:|-]+\|\s*$/.test(l); }
+
+  function render(raw) {
+    var lines = esc(raw || '(无回答)').split(/\r?\n/);
+    var out = [], list = null, para = [], i = 0;
+
+    function flushPara() { if (para.length) { out.push('<p>' + para.join('<br>') + '</p>'); para = []; } }
+    function flushList() {
+      if (list) { out.push('<' + list.tag + '>' + list.items.join('') + '</' + list.tag + '>'); list = null; }
     }
 
-    function askExample(el) {
-      input.value = el.textContent.trim();
-      ask();
-    }
+    while (i < lines.length) {
+      var t = lines[i].trim();
 
-    function renderTrace(trace) {
-      const box = $('trace');
-      box.innerHTML = '';
-      if (!trace || trace.length === 0) {
-        box.innerHTML = '<div class="kv"><span class="k">本次没有调用任何工具</span></div>';
-        return;
-      }
-      trace.forEach((t, i) => {
-        const step = document.createElement('div');
-        step.className = 'step';
-        const args = t.arguments && Object.keys(t.arguments).length
-          ? JSON.stringify(t.arguments) : '{}';
-        const result = t.result == null ? '' : t.result;
-        step.innerHTML =
-          '<div class="dot">' + (i + 1) + '</div>' +
-          '<div class="tool">' + esc(t.tool) + '</div>' +
-          '<div class="kv"><span class="k">参数</span><code>' + esc(args) + '</code></div>' +
-          '<pre>' + esc(result) + '</pre>';
-        box.appendChild(step);
-      });
-    }
-
-    async function ask() {
-      const question = input.value.trim();
-      errEl.textContent = '';
-      if (!question) { errEl.textContent = '请先输入任务'; return; }
-
-      btn.disabled = true;
-      $('out').classList.add('hidden');
-      $('loading').classList.remove('hidden');
-
-      try {
-        const res = await fetch('/agent', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question })
-        });
-        if (!res.ok) throw new Error('接口返回 ' + res.status);
-        const data = await res.json();
-
-        $('answer').textContent = data.answer || '(无回答)';
-        $('steps').textContent = '调用了 ' + (data.steps || 0) + ' 次工具';
-        renderTrace(data.trace);
-
-        if (data.note) {
-          $('note').textContent = data.note;
-          $('note').classList.remove('hidden');
-        } else {
-          $('note').classList.add('hidden');
+      if (isRow(t) && i + 1 < lines.length && isSep(lines[i + 1].trim())) {
+        flushPara(); flushList();
+        var head = t.replace(/^\||\|$/g, '').split('|').map(function (c) { return c.trim(); });
+        i += 2;
+        var body = [];
+        while (i < lines.length && isRow(lines[i].trim())) {
+          body.push(lines[i].trim().replace(/^\||\|$/g, '').split('|')
+            .map(function (c) { return inline(c.trim()); }));
+          i++;
         }
-        $('out').classList.remove('hidden');
-      } catch (e) {
-        errEl.textContent = '请求失败：' + e.message + '（后端服务是否在运行？）';
-      } finally {
-        $('loading').classList.add('hidden');
-        btn.disabled = false;
+        out.push('<div class="tbl"><table><thead><tr>' +
+          head.map(function (h) { return '<th>' + inline(h) + '</th>'; }).join('') +
+          '</tr></thead><tbody>' +
+          body.map(function (r) {
+            return '<tr>' + r.map(function (c) { return '<td>' + c + '</td>'; }).join('') + '</tr>';
+          }).join('') + '</tbody></table></div>');
+        continue;
       }
-    }
 
-    input.addEventListener('keydown', e => { if (e.key === 'Enter') ask(); });
-    input.focus();
-  </script>
+      var h = t.match(/^#{1,6}\s+(.*)$/);
+      if (h) { flushPara(); flushList(); out.push('<h3>' + inline(h[1]) + '</h3>'); i++; continue; }
+
+      var m = t.match(/^([-*\u2022]|\d+[.\u3001)])\s+(.*)$/);
+      if (m) {
+        flushPara();
+        var tag = /\d/.test(m[1]) ? 'ol' : 'ul';
+        if (!list || list.tag !== tag) { flushList(); list = { tag: tag, items: [] }; }
+        list.items.push('<li>' + inline(m[2]) + '</li>');
+        i++; continue;
+      }
+
+      if (!t) { flushPara(); flushList(); i++; continue; }
+      flushList();
+      para.push(inline(t));
+      i++;
+    }
+    flushPara(); flushList();
+    return out.join('') || '<p>(无回答)</p>';
+  }
+
+  /* ---------- 轨迹：按账本的行来排 ---------- */
+  function renderTrace(trace) {
+    var box = $('trace');
+    box.innerHTML = '';
+    if (!trace || !trace.length) {
+      box.innerHTML = '<div class="trow"><div class="i">—</div>' +
+        '<div class="t none">未调用任何工具</div>' +
+        '<div class="r">模型直接作答（常识型问题本就不该调工具）</div></div>';
+      return;
+    }
+    trace.forEach(function (t, n) {
+      var args = t.arguments ? JSON.stringify(t.arguments) : '';
+      var res = String(t.result || '').replace(/\s+/g, ' ').trim();
+      if (res.length > 120) { res = res.slice(0, 120) + '\u2026'; }
+      var cls = t.tool === '(\u683c\u5f0f\u7ea0\u6b63)' ? 't correct' : 't';
+      var row = document.createElement('div');
+      row.className = 'trow';
+      row.innerHTML = '<div class="i">' + (n + 1) + '</div>' +
+        '<div class="' + cls + '">' + esc(t.tool) + '</div>' +
+        '<div class="r"><code>' + esc(args) + '</code>\u3000' + esc(res) + '</div>';
+      box.appendChild(row);
+    });
+  }
+
+  /* ---------- 侧栏：全部来自后端真数据 ---------- */
+  function row(k, v, sub) {
+    return '<div><dt>' + esc(k) + '</dt><dd>' + esc(v) +
+           (sub ? '<small>' + esc(sub) + '</small>' : '') + '</dd></div>';
+  }
+
+  function loadChrome() {
+    fetch('/health').then(function (r) { return r.json(); }).then(function (h) {
+      var fin = h.mode === 'finance';
+      $('pill-mode').innerHTML = '\u6a21\u5f0f <b>' + (fin ? '\u8d22\u52a1\u52fe\u7a3d' : 'CSV \u5206\u6790') + '</b>';
+      $('dot').className = 'dot on';
+      $('pill-state').textContent = h.tools.length + ' \u4e2a\u5de5\u5177\u5c31\u7eea';
+      $('spec').innerHTML =
+        row('\u5f53\u524d\u6a21\u5f0f', fin ? '\u8d22\u52a1\u52fe\u7a3d' : 'CSV \u5206\u6790',
+            fin ? 'AGENT_MODE=finance' : 'AGENT_MODE=csv') +
+        row('\u8f6e\u6b21\u4e0a\u9650', h.max_steps + ' \u8f6e', 'MAX_STEPS') +
+        row('\u5df2\u6302\u8f7d\u5de5\u5177', h.tools.length + ' \u4e2a', '');
+      $('tools-count').textContent = h.tools.length + ' \u4e2a';
+      $('tools-list').textContent = h.tools.join('\u3000');
+      $('load-note').textContent = '\u6a21\u578b\u6b63\u5728\u51b3\u5b9a\u8c03\u7528\u54ea\u4e9b\u5de5\u5177\uff08\u4e0a\u9650 ' + h.max_steps + ' \u8f6e\uff09\u2026';
+    }).catch(function () {
+      $('dot').className = 'dot off';
+      $('pill-state').textContent = '\u8bfb\u4e0d\u5230 /health';
+    });
+
+    fetch('/assets').then(function (r) { return r.json(); }).then(function (a) {
+      $('assets-total').textContent = a.count + ' \u4e2a\u6587\u4ef6';
+      $('files').innerHTML = a.files.map(function (f) {
+        var meta = f.rows ? (f.rows + ' \u884c') : (f.size_kb + ' KB');
+        return '<li><span class="nm">' + esc(f.path) + '</span>' +
+               '<span class="meta">' + esc(meta) + '</span></li>';
+      }).join('') || '<li><span class="nm">(data/ \u4e3a\u7a7a)</span></li>';
+    }).catch(function () {
+      $('files').innerHTML = '<li><span class="nm">\u8bfb\u4e0d\u5230 /assets</span></li>';
+    });
+  }
+
+  /* ---------- 提问 ---------- */
+  function ask(question) {
+    question = (question || '').trim();
+    if (!question) { input.focus(); return; }
+    btn.disabled = true;
+    show('st-loading');
+    var t0 = Date.now();
+
+    fetch('/agent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: question })
+    }).then(function (r) {
+      if (!r.ok) { throw new Error('\u63a5\u53e3\u8fd4\u56de HTTP ' + r.status); }
+      return r.json();
+    }).then(function (d) {
+      $('answer').innerHTML = render(d.answer);
+      $('d-steps').textContent = String(d.steps === undefined ? (d.trace || []).length : d.steps);
+      $('d-secs').textContent = ((Date.now() - t0) / 1000).toFixed(1) + ' \u79d2';
+      var srcs = [];
+      (d.trace || []).forEach(function (t) {
+        var s = JSON.stringify(t.arguments || {});
+        var mm = s.match(/data\/[^"\\]+/g);
+        if (mm) { mm.forEach(function (x) { if (srcs.indexOf(x) < 0) { srcs.push(x); } }); }
+      });
+      $('d-src').textContent = srcs.length
+        ? srcs.slice(0, 2).join(' \u00b7 ')
+        : '\u672a\u8bfb\u6570\u636e\uff08\u5e38\u8bc6\u4f5c\u7b54\uff09';
+      renderTrace(d.trace);
+      var note = $('note');
+      if (d.note) { note.textContent = d.note; note.classList.remove('hidden'); }
+      else { note.classList.add('hidden'); }
+      show('st-answer');
+    }).catch(function (e) {
+      $('err-msg').textContent = e.message || String(e);
+      show('st-error');
+    }).then(function () { btn.disabled = false; });
+  }
+
+  form.addEventListener('submit', function (e) { e.preventDefault(); ask(input.value); });
+  $('samples').addEventListener('click', function (e) {
+    var chip = e.target.closest('.chip');
+    if (!chip) { return; }
+    input.value = chip.dataset.q;
+    ask(chip.dataset.q);
+  });
+
+  loadChrome();
+})();
+</script>
 </body>
 </html>

@@ -1,0 +1,35 @@
+{
+  "meta": {
+    "purpose": "真实业务场景验收：特斯拉 2014-2024 财务数据（**官方 SEC EDGAR XBRL**）",
+    "why": "主评测集与脏数据探针都是合成数据；本集是**官方一手财报**，用来验证 Agent 能不能处理真实业务表",
+    "data": "data/tesla/tesla_financials.csv（宽表：年份 × 6 指标，单位百万美元）",
+    "data2": "data/tesla/sec_raw_facts.csv（原始取数痕迹：年份/指标/tag/原始美元/申报表/申报日，66 条）",
+    "source": "SEC EDGAR companyconcept 接口，CIK=0001318605；由 fetch_tesla_sec.py 抓取，可重复再生",
+    "truth_note": "所有 expect_numbers 由 pandas 从 tesla_financials.csv 现算，非手写",
+    "history": "★ 早期曾用另一份来源的数值生成过三个演示表（tesla_income_*.csv），其 2014 毛利 352 与官方 881.7 冲突，已删除",
+    "require_tools_note": "★ 本集 10 题答案都只能来自本地文件，全部标了 require_tools=1。起因：实测 T05 模型一次工具都没调，凭记忆答出 2020/721 就被判通过（数字对但没读文件）；T03/T08 更在没 list_files 的情况下宣称「data/ 里没有数据」。特斯拉是知名公司，模型有记忆，不加这条接地判据就测不出 Agent 到底有没有接上数据。",
+    "total": 10
+  },
+  "tasks": [
+    {"id": "T01", "category": "tesla", "require_tools": 1, "question": "data/tesla/tesla_financials.csv 覆盖了哪些年份？一共几行？",
+     "expect_numbers": [11], "expect_texts": ["2014", "2024"]},
+    {"id": "T02", "category": "tesla", "require_tools": 1, "question": "特斯拉 2014 年的毛利率是多少？",
+     "expect_numbers": [27.57], "expect_texts": []},
+    {"id": "T03", "category": "tesla", "require_tools": 1, "question": "特斯拉 2022 年的毛利率是多少？",
+     "expect_numbers": [25.6], "expect_texts": []},
+    {"id": "T04", "category": "tesla", "require_tools": 1, "question": "2014 到 2024 这十一年里，特斯拉营收最高的是哪一年、多少百万美元？",
+     "expect_numbers": [97690], "expect_texts": ["2024"]},
+    {"id": "T05", "category": "tesla", "require_tools": 1, "question": "特斯拉哪一年首次实现全年净利润为正？当年净利润是多少百万美元？",
+     "expect_numbers": [721], "expect_texts": ["2020"]},
+    {"id": "T06", "category": "tesla", "require_tools": 1, "question": "2014 到 2024 这十一年，特斯拉净利润合计多少百万美元？",
+     "expect_numbers": [35226], "expect_texts": []},
+    {"id": "T07", "category": "tesla", "require_tools": 1, "question": "这十一年里特斯拉净利润最高的是哪一年、多少百万美元？",
+     "expect_numbers": [14997], "expect_texts": ["2023"]},
+    {"id": "T08", "category": "tesla", "require_tools": 1, "question": "特斯拉 2024 年的研发费用是多少百万美元？",
+     "expect_numbers": [4540], "expect_texts": []},
+    {"id": "T09", "category": "tesla", "require_tools": 1, "question": "data/tesla/sec_raw_facts.csv 里一共有多少条取数记录？",
+     "expect_numbers": [66], "expect_texts": []},
+    {"id": "T10", "category": "tesla", "require_tools": 1, "question": "特斯拉 2025 年的营收是多少？",
+     "expect_numbers": [], "expect_texts": ["没有", "无", "未", "不包含", "2024", "不含"]}
+  ]
+}

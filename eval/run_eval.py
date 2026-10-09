@@ -120,6 +120,9 @@ def main() -> int:
               f"/block{rec['tool_blocked']}) {rec['latency_s']}s  {t['question'][:26]}")
         if not sc["passed"]:
             why = []
+            if not sc["grounded"]:
+                why.append(f"★没接地:需≥{sc['require_tools']}次工具调用,实际{sc['tools_used']}次"
+                           f"（数字像是凭记忆答的）")
             if not sc["numbers_ok"]:
                 why.append(f"数字缺:{[k for k,v in sc['numbers_detail'].items() if not v]}")
             if not sc["texts_ok"]:

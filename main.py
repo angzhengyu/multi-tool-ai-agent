@@ -1,24 +1,25 @@
 # -*- coding: utf-8 -*-
 """
-多工具 AI Agent（模块 3：加了前端页面）
+多工具 AI Agent
 =====================================================
 Agent 主循环 + 工具集：模型自己决定调哪些工具、按什么顺序调。
 
 工具（与下方 TOOLS_SCHEMA 保持一致）：
-  get_current_time / calculate / list_files / describe_csv / aggregate_csv
+  get_current_time / calculate / list_files / describe_csv / read_excel / aggregate_csv
   （高危工具 run_python 默认不挂载，需设 ENABLE_RUN_PYTHON=1 开启）
 
 链路：
   用户提问 → 模型看"工具清单"自己决策
        ├─ 不用工具  → 直接回答
-       └─ 要调工具  → 我们执行 → 结果喂回 → 模型再决策 → …（最多 5 轮）→ 最终答案
+       └─ 要调工具  → 我们执行 → 结果喂回 → 模型再决策 → …（最多 MAX_STEPS 轮）→ 最终答案
 
 接口：
   GET  /        前端页面（能看答案 + 工具调用轨迹）
   POST /agent   {"question": "..."} → {answer, trace, steps}
-  GET  /health  健康检查（列出当前有哪些工具）
+  GET  /health  健康检查（当前模式、已挂载工具、轮次上限）
+  GET  /assets  数据资产清单（前端"数据资产"面板用）
 
-注意：本项目用端口 8001，避免和项目 A（8000）冲突。
+端口：8001（写在文件末尾的 __main__ 分支里）。
 """
 import json
 import os
@@ -32,10 +33,60 @@ from openai import OpenAI
 
 import tools
 
+# ====================== 启动自检：依赖缺一个都别"假装能跑" ======================
+# 真实事故（2026-10-09）：用 `python -m venv .venv` + `pip install -r requirements.txt`
+# 建出来的项目内环境，装了 fastapi/openai/dotenv 却**漏了 pandas**（它是 requirements 最后一行，
+# 安装没跑完）。于是服务**能正常启动、网页能打开**，但 describe_csv / aggregate_csv /
+# run_python 全部报 ModuleNotFoundError —— 模型只能在回答里说"工具全部执行失败"。
+# 这类失败最难排查，因为表面上"服务是好的"。
+# 因此这里在**启动时**就把话说清楚：缺什么、当前用的是哪个解释器、该怎么修。
+import importlib.util as _ilu
+import sys as _sys
+
+_REQUIRED = {
+    "pandas": "describe_csv / aggregate_csv / run_python 都靠它读表",
+    "numpy": "pandas 的依赖，同时也被 run_python 的预置导入用到",
+    "openpyxl": "read_excel 靠它读 .xlsx（财务勾稽模式必需）",
+}
+_missing = {m: why for m, why in _REQUIRED.items() if _ilu.find_spec(m) is None}
+
+if _missing:
+    _lines = [
+        "",
+        "=" * 78,
+        "⚠️  启动自检未通过：当前解释器缺少以下依赖，工具会在运行时报错",
+        "=" * 78,
+        f"  当前解释器：{_sys.executable}",
+        "",
+    ]
+    for _m, _why in _missing.items():
+        _lines.append(f"  ✗ {_m:<10} —— {_why}")
+    _lines += [
+        "",
+        "  修复（二选一）：",
+        f"    ① 给这个环境补装：",
+        f'       "{_sys.executable}" -m pip install {" ".join(_missing)}',
+        f"    ② 或换一个装了全部依赖的解释器启动（例如项目里的 .venv）：",
+        f"       .venv\\Scripts\\python.exe main.py        # Windows",
+        "",
+        "  说明：自检不阻断启动（网页仍可打开），但上面这些工具一定不可用。",
+        "=" * 78,
+        "",
+    ]
+    print("\n".join(_lines))
+else:
+    print(f"[自检] 依赖齐全（pandas / numpy / openpyxl），解释器：{_sys.executable}")
+
 BASE_DIR = Path(__file__).parent
 STATIC_DIR = BASE_DIR / "static"
+
+# 加载密钥：优先项目自己的 .env；没有就往上找两级
+# （方便把 .env 放在工作区根目录统一管理，同时不写死任何本机绝对路径）
 load_dotenv(BASE_DIR / ".env")
-load_dotenv(r"D:\AI-Career\.env")
+for _parent in (BASE_DIR.parent, BASE_DIR.parent.parent):
+    if (_parent / ".env").exists():
+        load_dotenv(_parent / ".env")
+        break
 
 client = OpenAI(api_key=os.getenv("DEEPSEEK_API_KEY"), base_url="https://api.deepseek.com")
 
@@ -90,6 +141,24 @@ TOOLS_SCHEMA = [
     {
         "type": "function",
         "function": {
+            "name": "read_excel",
+            "description": ("读取一个 Excel 工作簿（.xlsx/.xlsm）的**结构与双通道内容**："
+                            "表清单、行列规模、合并单元格、标签/数值/公式，以及**缓存值是否可用**。"
+                            "★ 财务勾稽必须先调它：它同时给出「公式文本（通道A）」和「缓存值（通道B）」，"
+                            "并明确告诉你哪些公式格缓存缺失 —— 程序生成、没被 Excel 保存过的文件，"
+                            "缓存值会整片为空，**不要当成 0**。路径写项目内相对路径，如 data/fin/sample_fin.xlsx。"),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "工作簿的相对路径，如 data/fin/sample_fin.xlsx"},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "aggregate_csv",
             "description": ("在本地对 CSV 做分组聚合（分组、求和、平均、计数、排序取前几名），"
                             "只把聚合结果返回。统计类问题用它。"
@@ -117,6 +186,9 @@ TOOL_FUNCS = {
     "list_files": tools.list_files,
     "describe_csv": tools.describe_csv,
     "aggregate_csv": tools.aggregate_csv,
+    # read_excel 是**只读**工具（只读项目内文件、不批量返回明细），
+    # 因此和 describe_csv 同级常开，不需要 ENABLE_RUN_PYTHON。
+    "read_excel": tools.read_excel,
 }
 
 # run_python（执行任意代码）**默认关闭**：能力最强、也最危险。
@@ -159,14 +231,35 @@ SYSTEM_PROMPT = """你是一个可以调用工具的助手。你有这些工具�
 4. 最后用中文把结论讲清楚。
 
 规则：
-1. 不需要工具就能回答的（闲聊、常识）→ 直接回答，不要调用工具；
+1. 先分清问题属于哪一类：
+   - **要"本地数据里的数字"**（某个表/某个公司某年的某个指标、某文件里有多少行…）
+     → **必须先调工具查 data/ 目录，即使你认为自己记得答案。**
+     凭记忆报出的公开数据（尤其上市公司财报）一律不算数：模型记忆会记错，而且没有来源可追溯。
+   - **与本地数据无关**（闲聊、概念解释、换算公式、当前时间）→ 直接回答，不要调用工具。
 2. 只用工具返回的真实结果作答，不要编造数字；
-3. 只允许分析本项目 data/ 目录内的文件；不要尝试访问项目外的路径；
-4. 这些工具**只返回聚合结果，不返回明细行**（保护隐私），所以不要试图索取原始数据行；
-5. 回答要用自然语言，**绝对不要**把工具调用的内部标记（如 <|DSML|>、invoke name=）写进回答。
+3. **在说"没有数据/请你把文件放进 data/"之前，必须先用 list_files 把 data/ 目录列出来**，
+   确认真的没有再说。data/ 下可能还有子目录，要逐层看。
+4. 只允许分析本项目 data/ 目录内的文件；不要尝试访问项目外的路径；
+5. 这些工具**只返回聚合结果，不返回明细行**（保护隐私），所以不要试图索取原始数据行；
+6. 回答要用自然语言，**绝对不要**把工具调用的内部标记（如 <|DSML|>、invoke name=）写进回答。
 """
 
-MAX_STEPS = 5   # 最多几轮"决策 → 调工具 → 喂回"，防止死循环
+# ★ 提示词模式：默认是 CSV 数据分析版；要做财务报表勾稽就设 AGENT_MODE=finance。
+#   财务版提示词放在 prompts/finance_agent.md（可随时改文本，不用动代码）。
+AGENT_MODE = os.getenv("AGENT_MODE", "csv")
+_FIN_PROMPT_FILE = Path(__file__).parent / "prompts" / "finance_agent.md"
+if AGENT_MODE == "finance":
+    if _FIN_PROMPT_FILE.exists():
+        SYSTEM_PROMPT = _FIN_PROMPT_FILE.read_text(encoding="utf-8")
+        print(f"[提示词] 已加载财务勾稽版（{len(SYSTEM_PROMPT)} 字符）")
+    else:
+        print(f"[提示词] ⚠️ AGENT_MODE=finance 但找不到 {_FIN_PROMPT_FILE}，已回退到 CSV 版")
+
+MAX_STEPS = int(os.getenv("MAX_STEPS", "15"))   # 最多几轮"决策 → 调工具 → 喂回"，防止死循环
+# ★ 为什么从 5 提到 15（实测依据，不是拍脑袋）：
+#   在「财务勾稽」这类真实任务上，一次跑批用了 9 次工具调用、在第 5 轮就用尽配额，
+#   报告还没写出来就被兜底分支截断了。要完成「结构勘察 → 双通道读取 → 逐条校验 → 出报告」，
+#   5 轮根本不够。轮次上限是防死循环的护栏，不该变成能力的瓶颈。
 
 
 def _looks_like_tool_markup(text: str) -> bool:
@@ -177,6 +270,29 @@ def _looks_like_tool_markup(text: str) -> bool:
     """
     t = text or ""
     return ("DSML" in t) or ("invoke name=" in t) or ("<|tool" in t)
+
+
+def _strip_tool_markup(text: str) -> str:
+    """保底清洗：万一重新生成仍然泄漏，也**绝不能让用户看见内部标记**。
+
+    这不是"把回答修好"，是一道兜底。它做两件事：
+      · 标记出现在正文之后 → 保留标记之前的正文并注明已截断；
+      · 正文本身就没成形 → 换成一句实话，而不是把内部语法丢给用户。
+    标记里的竖线有全角（U+FF5C）和半角两种写法，这里都用 unicode 转义匹配，
+    避免源码里出现字面量。
+    """
+    import re
+
+    t = text or ""
+    pipes = re.escape("\uff5c")                      # 全角竖线
+    m = re.search(r"[<\uff5c]{0,3}\s*DSML", t) or re.search(r"<\|tool", t)
+    if not m:
+        return t
+    head = t[: m.start()].rstrip()
+    if len(head) >= 40:                              # 前面还有像样的正文
+        return head + "\n\n（回答末尾混入了工具调用的内部标记，已截断。）"
+    return ("已达最大工具步数，但模型没能组织出完整回答。"
+            "已获得的工具结果都在上方轨迹里，可据此判断下一步。")
 
 
 def run_agent(question: str) -> dict:
@@ -236,8 +352,37 @@ def run_agent(question: str) -> dict:
     # 到了最大步数还没给出最终回答 → 最后再问一次（这次不给工具），让它基于已有信息作答。
     # 这样用户至少能得到一个解释，而不是一句冷冰冰的"达到最大步数"。
     final = client.chat.completions.create(model="deepseek-chat", messages=messages)
+    answer = final.choices[0].message.content or ""
+
+    # ★ 缺陷修复（原第 2 号缺陷）：兜底分支原先**直接返回原文**，绕过了上面那条正常路径上的
+    #   DSML 清洗。结果是——**最需要兜底的场景（模型已经卡了十几轮）反而最容易把内部标记吐给用户**。
+    #   实测在真实财务任务上复现过：整段回答全是内部调用语法。
+    if _looks_like_tool_markup(answer):
+        note = "兜底回答里出现工具调用内部标记，已处理"
+        try:
+            retry = client.chat.completions.create(
+                model="deepseek-chat",
+                messages=messages + [
+                    {"role": "assistant", "content": answer},
+                    {"role": "user", "content": (
+                        "你的回答里混进了工具调用的内部标记，用户看到的就是一堆内部语法。"
+                        "请**只用中文自然语言**重述你目前已经确认的结论，"
+                        "不要再输出任何内部标记，也不要再尝试调用工具。")},
+                ],
+            )
+            cleaned = (retry.choices[0].message.content or "").strip()
+            if cleaned and not _looks_like_tool_markup(cleaned):
+                answer = cleaned
+            else:
+                answer = _strip_tool_markup(answer)
+                note += "（重新生成仍未通过，已按保底规则清洗）"
+        except Exception:
+            answer = _strip_tool_markup(answer)
+            note += "（重新生成失败，已按保底规则清洗）"
+        trace.append({"tool": "(格式纠正)", "arguments": {}, "result": note})
+
     return {
-        "answer": final.choices[0].message.content,
+        "answer": answer,
         "trace": trace,
         "steps": len(trace),
         "note": "已达到最大工具调用步数，以下为基于已获得信息的回答",
@@ -266,8 +411,48 @@ def agent(req: AgentRequest):
 
 @app.get("/health")
 def health():
-    """健康检查：能看出当前挂了哪些工具。"""
-    return {"status": "ok", "tools": list(TOOL_FUNCS)}
+    """健康检查：当前模式、工具集、轮次上限 —— 前端用它显示真实状态。"""
+    return {
+        "status": "ok",
+        "mode": AGENT_MODE,
+        "tools": list(TOOL_FUNCS),
+        "max_steps": MAX_STEPS,
+    }
+
+
+@app.get("/assets")
+def assets():
+    """数据资产清单（只读）：data/ 下的文件、大小、类型。
+
+    给前端侧栏用 —— 让它显示**库里真有什么**，而不是写死的文案。
+    新增一个 csv / xlsx 进去，刷新页面就会多一行。
+    """
+    files = []
+    # ★ 用 tools.DATA_DIR，别在 main.py 里另起一个：数据目录只该有一个真相来源。
+    #   （第一版直接写了 DATA_DIR，而 main.py 里没这个变量 → 500 NameError）
+    data_dir = tools.DATA_DIR
+    for p in sorted(data_dir.rglob("*")):
+        if not p.is_file() or p.name.startswith("."):
+            continue
+        rel = p.relative_to(data_dir).as_posix()
+        suffix = p.suffix.lower()
+        kind = ("明细表" if suffix == ".csv" else
+                "工作簿" if suffix in (".xlsx", ".xlsm") else
+                "说明" if suffix == ".md" else
+                "结论" if suffix == ".json" else "其它")
+        item = {"path": f"data/{rel}", "name": p.stem, "size_kb": round(p.stat().st_size / 1024, 1),
+                "kind": kind, "ext": suffix}
+        # CSV 顺手给出行列数（读表头，不做统计；读不动就跳过）
+        if suffix == ".csv":
+            try:
+                import pandas as pd
+                df = pd.read_csv(p, nrows=0)
+                item["rows"] = sum(1 for _ in open(p, encoding="utf-8-sig", errors="ignore")) - 1
+                item["cols"] = len(df.columns)
+            except Exception:
+                pass
+        files.append(item)
+    return {"files": files, "count": len(files)}
 
 
 # 方便启动：直接 `python main.py`（端口 8001，避开项目 A 的 8000）

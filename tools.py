@@ -2,13 +2,12 @@
 """
 Agent 的工具集
 ==============
-模块 2：聚焦"读 CSV + 分析数据"。
-
-工具清单：
+工具清单（与 main.py 的 TOOLS_SCHEMA 保持一致）：
   get_current_time   取当前时间
   calculate          算数表达式（有字符白名单）
   list_files         列出项目里的文件
   describe_csv       在本地探查 CSV 结构（列名/类型/缺失/数值列统计，**不返回明细行**）
+  read_excel         读 Excel 结构 + 双通道内容（公式文本 / 缓存值 / 缓存缺失统计），**只读**
   aggregate_csv      在本地做分组聚合（分组/求和/平均/计数/排序取前 N，**只返回聚合结果**）
   run_python         执行 Python 代码（可用 pandas / numpy）做数据分析
                      ↑ 能力最强也最危险，**默认关闭**，需 ENABLE_RUN_PYTHON=1 开启
@@ -72,6 +71,108 @@ def list_files(dir_path: str = ".") -> str:
             continue
         lines.append(p.name + ("/" if p.is_dir() else ""))
     return "\n".join(lines) if lines else "(空目录)"
+
+
+# ---------------- Excel 工作簿工具（财务场景）----------------
+# 为什么要有这个专工具，而不是让模型用 run_python 裸写 openpyxl：
+#   ① 读一张表要写二十几行代码、还要写两遍（公式 / 缓存值），实测吃掉 2~3 轮，
+#      而主循环只有有限轮次；
+#   ② 让模型自己回忆 openpyxl 用法，它会写出平台错误的路径（实测出现过 /home/user）；
+#   ③ 最关键的一条：**「缓存值是否存在」必须由工具明确告知**，而不是让模型自己发现 ——
+#      程序生成的 xlsx 缓存值全为 None，模型若把 None 当 0 继续算，整份报告就废了。
+#   它仍然在沙箱内、只读项目目录，**没有放宽任何边界**。
+_EXCEL_MAX_LIST = 40          # 每张表最多列多少个单元格（防止大表把输出灌爆）
+
+
+def read_excel(path: str) -> str:
+    """工具：读取一个 Excel 工作簿的**结构 + 双通道内容**，不返回批量明细。
+
+    双通道（财务勾稽的必要条件）：
+      · 通道 A（公式文本）：理解计算逻辑、追踪跨表引用
+      · 通道 B（缓存值）  ：上一次 Excel 计算的结果
+    程序生成、从未被 Excel 打开保存过的文件，**通道 B 会整片为空** ——
+    本工具会**明确统计并告警**，不要把它当成 0。
+    """
+    import openpyxl
+
+    try:
+        p = _safe_path(path)
+    except ValueError as e:
+        return str(e)
+    if not p.exists():
+        return f"文件不存在：{path}"
+    if p.suffix.lower() not in (".xlsx", ".xlsm"):
+        return (f"read_excel 只支持 .xlsx / .xlsm（收到的是 {p.suffix or '无扩展名'}）。"
+                f"旧版 .xls 请先用 Excel 另存为 .xlsx；CSV 请用 describe_csv。")
+
+    try:
+        wb_f = openpyxl.load_workbook(p, data_only=False)     # 通道 A：公式
+        wb_v = openpyxl.load_workbook(p, data_only=True)      # 通道 B：缓存值
+    except Exception as e:
+        return f"打开工作簿失败：{type(e).__name__}: {e}"
+
+    lines = [f"文件：{path}"
+             f"（{p.stat().st_size / 1024:.1f} KB，工作表 {len(wb_f.sheetnames)} 张）",
+             f"工作表：{' / '.join(wb_f.sheetnames)}"]
+
+    for name in wb_f.sheetnames:
+        wf, wv = wb_f[name], wb_v[name]
+        n_row = wf.max_row or 0
+        n_col = wf.max_column or 0
+        lines.append("")
+        lines.append(f"【{name}】{n_row} 行 × {n_col} 列")
+
+        merged = [str(r) for r in wf.merged_cells.ranges][:10]
+        lines.append(f"  合并单元格：{'、'.join(merged) if merged else '无'}")
+
+        labels, numbers, formulas, cached_hit, cached_miss, units = [], [], [], 0, 0, []
+        for row in wf.iter_rows():
+            for c in row:
+                fv = c.value
+                if fv is None:
+                    continue
+                cord = c.coordinate
+                if isinstance(fv, str) and fv.startswith("="):
+                    formulas.append(f"{cord}: {fv}")
+                    vv = wv[cord].value
+                    if vv is None or (isinstance(vv, str) and vv.startswith("#")):
+                        cached_miss += 1
+                    else:
+                        cached_hit += 1
+                elif isinstance(fv, (int, float)):
+                    numbers.append(f"{cord}={fv:g}")
+                else:
+                    txt = str(fv).strip()
+                    if any(u in txt for u in ("单位", "万元", "百万元", "千元", "元)")):
+                        units.append(f"{cord}=\"{txt[:24]}\"")
+                    if c.column == 1 or len(txt) <= 12:
+                        labels.append(f"{cord}={txt[:20]}")
+
+        if units:
+            lines.append(f"  ★ 单位线索：{' '.join(units[:6])}")
+        if labels:
+            lines.append(f"  标签（{len(labels)}）：{'  '.join(labels[:_EXCEL_MAX_LIST])}"
+                         + (" …" if len(labels) > _EXCEL_MAX_LIST else ""))
+        if numbers:
+            lines.append(f"  数值（{len(numbers)}）：{'  '.join(numbers[:_EXCEL_MAX_LIST])}"
+                         + (" …" if len(numbers) > _EXCEL_MAX_LIST else ""))
+        if formulas:
+            lines.append(f"  公式/通道A（{len(formulas)}）：{'  '.join(formulas[:_EXCEL_MAX_LIST])}"
+                         + (" …" if len(formulas) > _EXCEL_MAX_LIST else ""))
+            lines.append(f"  缓存值/通道B：{len(formulas)} 个公式格中 "
+                         f"**{cached_miss} 个缺失、{cached_hit} 个有值**")
+            if cached_miss and not cached_hit:
+                lines.append("  ⚠️ 该表通道 B **完全不可用**（文件由程序生成、从未被 Excel 保存过）。"
+                             "公式结果读不到，必须自己按通道A的公式求值，"
+                             "并把「本表缓存值缺失」写进报告的「未覆盖声明」。")
+            elif cached_miss:
+                lines.append(f"  ⚠️ 有 {cached_miss} 个公式格缓存值缺失，读数时不要当成 0。")
+        else:
+            lines.append("  （本表没有公式，全是静态值）")
+
+    lines.append("")
+    lines.append("提示：跨表引用请用「表名!单元格」；报告里每个数字都要能指到这里列出的坐标。")
+    return "\n".join(lines)
 
 
 def _load_csv(path: str):
@@ -204,7 +305,7 @@ SANDBOX_DIR = BASE_DIR / "sandbox"      # 子进程的工作目录
 MAX_OUTPUT_CHARS = 4000                 # 回传给模型的输出上限（防止海量明细出域）
 
 
-def run_python(code: str, timeout: int = 15) -> str:
+def run_python(code: str, timeout: int = 30) -> str:
     """工具：在**独立子进程**里执行 Python 代码（可用 pandas / numpy），返回 print 的输出。
 
     相比"在主进程里 exec"，这里是纵深防御：
