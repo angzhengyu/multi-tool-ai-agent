@@ -1,46 +1,35 @@
 # 多工具 AI Agent（Multi-Tool AI Agent）
 
-一个**能自己调用工具干活**的 AI Agent：给它一个任务，它自己决定**调用哪些工具、按什么顺序调**，最后给出结论。
-
-> 本项目是一次「**能力**」与「**安全**」的权衡实践：Agent 强大到能执行代码、读文件，就必须给它划清边界。这里记录了从"危险版本"到"默认安全的工具集 + 子进程沙箱"的完整重构过程。
-
----
-
-## 1. 项目简介
-
-基于 **Function Calling** 的多工具 Agent。用户用自然语言提任务，模型自主编排工具完成，并**回显完整的工具调用轨迹**（每一步调了什么、参数是什么、结果是什么），过程透明可见。
+一个**能自己调用工具干活**的 AI Agent：给它一个任务，它自己决定**调用哪些工具、按什么顺序调**，最后给出结论，并把**完整的工具调用轨迹**回显出来。
 
 典型任务：
+
 > 「读一下 `data/sales.csv`，告诉我销售额最高的三个产品」
 
 Agent 会自己完成：找文件 → 看数据结构 → 分组聚合 → 给出结论。
 
-## 2. 项目背景
+---
 
-大模型本身只会"说"，不会"做"。**Function Calling / 工具调用**让它能真正操作外部世界——这正是 AI Agent 与聊天机器人的分水岭。但能力越强风险越大：一个能执行任意代码的工具，等于把机器钥匙交出去。所以本项目同时回答两个问题：
-1. **怎么让 Agent 会干活？**
-2. **怎么在让它干活的同时，不把数据和系统置于风险中？**
+## 1. 核心功能
 
-## 3. 核心功能
+- **自主决策**：模型根据「工具清单」自己决定调不调工具、调哪个、调几次（闲聊不调，需要数据才调）
+- **多工具编排**：一次提问可连续调用多个工具（如 找文件 → 看结构 → 统计）
+- **本地数据分析**：在本地对 CSV / Excel 做结构探查与分组聚合，**明细数据不出本机**
+- **调用轨迹回显**：返回 `trace`，前端按时间线展示每一步，过程可审计
+- **默认安全**：默认只挂「受限分析工具」；高危工具默认关闭，需显式开启，且运行在独立子进程中
+- **容错健壮**：工具报错不会拖垮服务（错误作为结果喂回模型，模型可自行纠正重试）；超时强制终止；格式异常自动纠正
 
-- 🤖 **自主决策**：模型根据"工具清单"自己决定调不调工具、调哪个、调几次（闲聊不调、需要数据才调）
-- 🧰 **多工具编排**：一次提问可连续调用多个工具（如 找文件 → 看结构 → 统计）
-- 📊 **本地数据分析**：在本地对 CSV 做结构探查与分组聚合，**明细数据不出本机**
-- 🧾 **调用轨迹回显**：返回 `trace`，前端按时间线展示每一步，过程可审计
-- 🛡️ **默认安全**：默认只挂"受限分析工具"；高危工具默认关闭，需显式开启，且运行在**子进程沙箱**中
-- ⏱️ **容错健壮**：工具报错不会拖垮服务（错误作为结果喂回模型，模型可自行纠正重试）；超时强杀；格式异常自动纠正
-
-## 4. 技术栈
+## 2. 技术栈
 
 | 层 | 技术 |
 |---|---|
 | 后端 | Python · FastAPI · Uvicorn |
 | 模型 | DeepSeek `deepseek-chat`（OpenAI 兼容接口，Function Calling） |
-| 数据处理 | pandas · numpy |
-| 安全 | 路径白名单 · 表达式白名单 · 子进程沙箱 · 精简环境变量 · 输出截断 |
+| 数据处理 | pandas · numpy · openpyxl |
+| 安全 | 路径白名单 · 表达式白名单 · 子进程隔离 · 精简环境变量 · 输出截断 |
 | 前端 | HTML · CSS · 原生 JS（`fetch`） |
 
-## 5. 系统架构
+## 3. 系统架构
 
 ```
 浏览器（static/index.html）
@@ -50,211 +39,141 @@ FastAPI（main.py）
      │  进入 Agent 主循环 run_agent()
      ▼
 ┌──────────────────────────────────────────────┐
-│  ① 带上"工具清单(TOOLS_SCHEMA)" + 用户问题     │
+│  ① 带上「工具清单(TOOLS_SCHEMA)」+ 用户问题    │
 │     请求 DeepSeek                             │
 │  ② 模型回复：                                  │
 │     ├─ tool_calls 为空 → 直接答，结束          │
 │     └─ tool_calls 非空 → 逐个执行工具           │
 │  ③ 工具执行（try/except 兜底，错误也喂回模型）  │
 │  ④ 结果以 role="tool" 消息喂回模型             │
-│  ⑤ 回到 ②，最多 MAX_STEPS=5 轮                 │
+│  ⑤ 回到 ②，最多 MAX_STEPS 轮（默认 15）        │
 └──────────────────────────────────────────────┘
      │  返回 {answer, trace, steps}
      ▼
 前端：答案 + 工具调用轨迹时间线
 ```
 
-## 6. 项目目录
+## 4. 项目目录
 
 ```
 multi-tool-ai-agent/
-├── main.py                  # FastAPI + Agent 主循环 + 工具注册
-├── tools.py                 # 工具实现（含安全检查与沙箱执行）
+├── main.py                       # FastAPI + Agent 主循环 + 工具注册
+├── tools.py                      # 工具实现（含安全检查与子进程隔离）
+├── prompts/
+│   └── finance_agent.md          # 财务勾稽模式的系统提示词（改文本即可，不动代码）
 ├── data/
-│   ├── sales.csv            # 示例销售数据（240 行，脚本生成的合成数据）
-│   └── hard/
-│       ├── orders_dirty.csv # 难度探针用脏数据（270 行：重复/缺失/千分位文本/空格/混格式）
-│       └── products.csv     # 产品 → 类别/品牌 关联表（做类别统计必须 join 它）
-├── eval/                    # ★ 评测集与指标（见 §14.1）
-│   ├── gen_eval_set.py      # 生成主评测集（28 条，标准答案由 pandas 现算）
-│   ├── gen_hard_set.py      # 生成难度探针（12 条，含脏数据注入）
-│   ├── run_eval.py          # 真实跑批（调 run_agent，落盘轨迹与完整回答）
-│   ├── summarize.py         # 算指标（只读结果文件，不调 API）
-│   ├── scoring.py           # 判分规则（集中一处，可离线重新判分）
-│   ├── verify_sandbox_path.py  # 沙箱"能做什么/不能做什么"实测
-│   ├── verify_fix.py        # 缺陷 1 修复是否真的生效（4 项断言）
-│   ├── metrics_*.md         # 指标汇总表
-│   ├── results_*.json       # 原始结果（含每条轨迹，可逐题复查）
-│   └── 难度探针-缺陷报告.md  # 发现的 4 个缺陷 + 1 个我自己的标准答案 bug
+│   ├── sales.csv                 # 示例销售数据（240 行，合成数据）
+│   ├── hard/
+│   │   ├── orders_dirty.csv      # 脏数据示例（270 行：重复/缺失/千分位文本/空格/混格式）
+│   │   └── products.csv          # 产品 → 类别/品牌 关联表（做类别统计需 join）
+│   ├── fin/
+│   │   ├── sample_fin.xlsx       # 财务三表示例（内含 12 处注入缺陷）
+│   │   ├── sample_fin_baked.xlsx # 同上，经 Excel 重算保存（缓存值可用）
+│   │   └── ground_truth.json     # 上述缺陷的标准答案
+│   └── tesla/
+│       ├── tesla_financials.csv  # 特斯拉 2014–2024 财务宽表（官方 SEC EDGAR 数据）
+│       ├── sec_raw_facts.csv     # 原始取数痕迹（66 条）
+│       └── README.md             # 数据来源与口径说明
 ├── static/
-│   └── index.html           # 前端页面（含工具调用轨迹展示）
+│   └── index.html                # 前端页面（含工具调用轨迹展示）
+├── eval/                         # 评测集与指标（见 §12.2）
+│   ├── eval_set.json             # 主评测集（28 条）
+│   ├── hard_set.json             # 难度探针（12 条脏数据任务）
+│   ├── tesla_set.json            # 真实财报集（10 条）
+│   ├── gen_eval_set.py           # 生成主评测集（标准答案由 pandas 现算）
+│   ├── gen_hard_set.py           # 生成难度探针（含脏数据注入）
+│   ├── run_eval.py               # 真实跑批（调 run_agent，落盘轨迹与完整回答）
+│   ├── summarize.py              # 算指标（只读结果文件，不调 API）
+│   ├── scoring.py                # 判分规则（集中一处，可离线重新判分）
+│   ├── check_ui.py               # 前端静态检查（配色/对比度/结构/JS 引用完整性）
+│   ├── metrics_*.md              # 指标汇总表
+│   └── results_*.json            # 原始结果（含每条轨迹，可逐题复查）
 ├── tests/
-│   └── check_sandbox.py     # 沙箱与安全拦截的验证脚本
-├── sandbox/                 # run_python 子进程的工作目录（运行时生成）
-├── generate_sample_data.py  # 合成数据生成脚本（固定随机种子，可复现）
+│   └── check_sandbox.py          # 子进程隔离与安全拦截的验证脚本
+├── generate_sample_data.py       # 合成数据生成脚本（固定随机种子，可复现）
+├── fetch_tesla_sec.py            # 从 SEC EDGAR 抓取财报（可重复再生）
+├── make_fin_sample.py            # 生成财务三表示例（含缺陷注入）
+├── run.bat                       # Windows 一键启动
 ├── requirements.txt
 ├── .env.example
-├── .gitignore
 └── README.md
 ```
 
-## 7. 环境安装
+> `sandbox/` 是 `run_python` 子进程的工作目录，运行时自动生成，已加入 `.gitignore`。
+
+## 5. 安装
+
+环境要求：**Python 3.10+**
 
 ```powershell
+git clone https://github.com/angzhengyu/multi-tool-ai-agent.git
+cd multi-tool-ai-agent
+
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
 ```
 
-### ⚠️ 装完必须验一下（这个坑真实发生过）
+装完确认依赖就绪：
 
 ```powershell
-.\.venv\Scripts\python.exe -c "import pandas, openpyxl; print('OK')"
+python -c "import pandas, openpyxl, fastapi; print('依赖就绪')"
 ```
 
-**为什么必须验**：`pip install -r requirements.txt` 是**逐行装**的。实测出现过：
-前 4 个包装好了、**最后一行的 pandas 没装上**（安装中途结束），结果是——
+> **请始终用同一个虚拟环境安装并启动。** Agent 执行 `run_python` 时是**以当前解释器**启动子进程的，
+> 如果换用一个没装 pandas 的 Python 启动，服务本身能跑，但数据类工具会报 `ModuleNotFoundError`。
 
-| 现象 | 真相 |
-|---|---|
-| 服务**正常启动**、网页**能打开** | fastapi / openai / dotenv 都在 |
-| 但 `describe_csv`、`aggregate_csv`、`run_python` 全部报 `ModuleNotFoundError: No module named 'pandas'` | pandas 不在 |
-| `read_excel` 报 `No module named 'openpyxl'` | openpyxl 之前**根本没写进 requirements**（已补） |
-
-**这是最难排查的一类失败**：表面上"服务是好的"。所以 `main.py` 现在**启动时自检**，
-缺依赖会直接打印一段告警（当前解释器路径 + 精确修复命令）：
-
-```
-⚠️  启动自检未通过：当前解释器缺少以下依赖，工具会在运行时报错
-  当前解释器：D:\AI-Career\05-projects\multi-tool-ai-agent\.venv\Scripts\python.exe
-  ✗ pandas     —— describe_csv / aggregate_csv / run_python 都靠它读表
-  ✗ openpyxl   —— read_excel 靠它读 .xlsx（财务勾稽模式必需）
-  修复（二选一）：
-    ① "…\.venv\Scripts\python.exe" -m pip install pandas numpy openpyxl
-    ② 或换成装了全部依赖的解释器启动：D:\AI-Career\.venv\Scripts\python.exe main.py
-```
-
-### 7.0 一键启动 `run.bat`（推荐，它会替你选解释器）
-
-本机同时存在**两个**环境，`run.bat` 会**逐个验证依赖**再决定用哪个：
-
-| 环境 | 有什么 | 能用吗 |
-|---|---|---|
-| 项目内 `.venv`（若自己建过） | fastapi/openai/dotenv | ❓ 取决于你有没有补 pandas |
-| 工作区根 `..\..\.venv` | **pandas/openpyxl 齐全** | ✅ 本机推荐 |
+### 一键启动（Windows）
 
 ```powershell
-.\run.bat          # 或直接双击；它会跳过缺依赖的环境并打印选中了哪个
+.\run.bat
 ```
 
-> **为什么不按"存在就用"的顺序选**：项目内 `.venv` 存在但缺 pandas 时，
-> "存在就用"会选中一个**能启动、工具全废**的环境 —— 这比找不到解释器更糟。
-
-### 7.1 进入虚拟环境（激活）
-
-本机的虚拟环境在**工作区根目录** `D:\AI-Career\.venv`（三个项目共用，不在本项目里）。
-**PowerShell**：
+`run.bat` 会**逐个验证候选解释器是否真的装了 pandas / openpyxl**，选中第一个可用的再启动，避免出现「服务能开、工具全废」的情况。想指定自己的解释器：
 
 ```powershell
-D:\AI-Career\.venv\Scripts\Activate.ps1
+set PY_AGENT=C:\path\to\python.exe
+run.bat
 ```
 
-激活成功后命令行提示符前面会出现 `(.venv)`。**进去之后 `python` 就是 venv 的解释器**，
-可以直接按 README 里的 `python xxx.py` 写法敲。
+## 6. 配置
 
-**怎么确认自己真的进去了**（三条都要过）：
-
-```powershell
-(Get-Command python).Source                              # 应指向 D:\AI-Career\.venv\Scripts\python.exe
-python -c "import sys; print(sys.executable)"            # 同上
-python -c "import pandas; print(pandas.__version__)"     # 应有版本号（本机 3.0.5），不是报 ModuleNotFoundError
-```
-
-**退出**：`deactivate`
-
-**其它终端**：
-```cmd
-:: CMD
-D:\AI-Career\.venv\Scripts\activate.bat
-```
-```bash
-# Git Bash
-source /d/AI-Career/.venv/Scripts/activate
-```
-
-**报「禁止运行脚本 / cannot be loaded because running scripts is disabled」时**：
-本机 `CurrentUser` 策略已经是 `RemoteSigned`，正常不会遇到；若换机器遇到，用**最小改动**的方式：
-
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass   # 只对当前这个窗口生效，关掉就恢复
-D:\AI-Career\.venv\Scripts\Activate.ps1
-```
-
-**不想激活也行**：直接用解释器的完整路径（本 README 里 `$PY` 就是这个意思）：
-
-```powershell
-$PY = "D:\AI-Career\.venv\Scripts\python.exe"
-& $PY main.py
-```
-
-**★ 一个实测出来的坑：`py -3` 会绕过虚拟环境**
-
-| 激活后再敲 | 实际用的解释器 | 有 pandas 吗 |
-|---|---|---|
-| `python` | `D:\AI-Career\.venv\Scripts\python.exe` | ✅ 3.0.5 |
-| `py`（不带版本号） | `D:\AI-Career\.venv\Scripts\python.exe` | ✅ |
-| **`py -3`** | `C:\Users\...\pythoncore-3.14-64\python.exe`（系统 Python） | ❌ **没有** |
-
-所以**激活了也别用 `py -3`** —— 它会把虚拟环境整个跳过。
-
-> ### ⚠️ 解释器必须用**装了 pandas 的那个**（踩过坑，写在这里）
->
-> **为什么必须强调**：`run_python` 是用 `sys.executable` 起子进程的，
-> 所以**启动 Agent 用哪个解释器，子进程就是哪个解释器**。
-> 如果用 `py -3`（系统 Python 3.14，没装 pandas）启动，
-> 主程序能跑（因为主程序只 `import` 了 openai/fastapi），
-> 但**每一次 `run_python` 都会 `ModuleNotFoundError: No module named 'pandas'`**，
-> 表现为"Agent 突然不会做数据清洗了"。排查顺序：先确认 `sys.executable` 里有 pandas。
->
-> **注意：激活是「每个终端窗口各自生效」的**，新开一个窗口要重新激活。
-> 想省事可以把激活命令写进 PowerShell 配置文件（`notepad $PROFILE`），自行决定要不要。
-
-## 8. 配置方法
-
-复制 `.env.example` 为 `.env`，填入：
+复制 `.env.example` 为 `.env` 并填写：
 
 ```
 DEEPSEEK_API_KEY=sk-你的密钥
+
 # 可选：开启高危工具 run_python（默认关闭）
 # ENABLE_RUN_PYTHON=1
+
+# 可选：切换为财务勾稽模式（默认 csv）
+# AGENT_MODE=finance
+
+# 可选：覆盖最大工具调用轮数（默认 15）
+# MAX_STEPS=15
 ```
 
-## 9. 启动方式
+## 7. 启动
 
 ```powershell
-# 方式一（推荐）：先激活虚拟环境，见 §7.1
-D:\AI-Career\.venv\Scripts\Activate.ps1
-python main.py                                  # 端口 8001
-# 需要高危工具时：$env:ENABLE_RUN_PYTHON='1'; python main.py
+python main.py          # 端口 8001
 ```
 
-```powershell
-# 方式二：不激活，直接用完整路径
-$PY = "D:\AI-Career\.venv\Scripts\python.exe"   # 必须是有 pandas 的那个，见 §7
-& $PY main.py
-# 需要高危工具时：$env:ENABLE_RUN_PYTHON='1'; & $PY main.py
-```
 - 网页：http://127.0.0.1:8001
 - 接口文档：http://127.0.0.1:8001/docs
+- 需要高危工具时：`$env:ENABLE_RUN_PYTHON='1'; python main.py`
 
-## 10. API 说明
+## 8. API 说明
 
 | 接口 | 方法 | 说明 |
 |---|---|---|
 | `/` | GET | 前端页面 |
-| `/agent` | POST | Agent 执行任务。请求 `{"question": "..."}`；返回 `{answer, trace, steps}` |
-| `/health` | GET | 健康检查，列出当前已挂载的工具 |
+| `/agent` | POST | 执行任务。请求 `{"question": "..."}`；返回 `{answer, trace, steps}` |
+| `/health` | GET | 健康检查：当前模式、已挂载工具、轮数上限 |
+| `/assets` | GET | 数据资产清单（`data/` 下的文件、大小、行数） |
 
 `POST /agent` 响应示例：
+
 ```json
 {
   "answer": "销售额最高的三个产品是：1) 笔记本 3,651,481  2) 手机 2,154,247  3) 平板 1,395,663",
@@ -269,13 +188,13 @@ $PY = "D:\AI-Career\.venv\Scripts\python.exe"   # 必须是有 pandas 的那个�
 }
 ```
 
-## 11. Demo 截图
+## 9. Demo 截图
 
 ![前端界面与工具调用轨迹](assets/demo.png)
 
 > 截图展示：输入任务 → 得到回答 + **工具调用轨迹时间线**（`list_files` → `describe_csv` → `aggregate_csv`）
 
-## 12. 工具清单
+## 10. 工具清单
 
 | 工具 | 能力 | 安全级别 |
 |---|---|---|
@@ -284,197 +203,178 @@ $PY = "D:\AI-Career\.venv\Scripts\python.exe"   # 必须是有 pandas 的那个�
 | `list_files` | 列出目录（限项目内） | 路径白名单 |
 | `describe_csv` | CSV 结构探查（列名/类型/缺失/统计） | 路径白名单，**不返回明细行** |
 | `aggregate_csv` | 分组聚合（分组/求和/平均/计数/排序取前 N） | 路径白名单 + **算式白名单**，**只返回聚合结果** |
-| `read_excel` | **读取 Excel 工作簿的结构 + 双通道内容**（公式文本 / 缓存值 / 缓存缺失统计 / 合并单元格 / 单位线索） | 路径白名单，**只读、不返回批量明细**；常开，不需要 `ENABLE_RUN_PYTHON` |
-| `run_python` | 执行任意 Python 代码 | ⚠️ **默认关闭**；开启后运行在**子进程沙箱**中 |
+| `read_excel` | 读 Excel 结构 + 双通道内容（公式文本 / 缓存值 / 缓存缺失统计 / 合并单元格 / 单位线索） | 路径白名单，**只读、不返回批量明细**；常开，不需要 `ENABLE_RUN_PYTHON` |
+| `run_python` | 执行 Python 代码（可用 pandas / numpy） | ⚠️ **默认关闭**；开启后在独立子进程中运行 |
 
-> `aggregate_csv` 的 `value_expr` 支持简单算式（如 `数量*单价`），但只允许「**列名 + 数字 + 运算符 + 括号**」，用列名白名单校验后执行 —— 所以既能算派生指标，又不会被注入。
+> `aggregate_csv` 的 `value_expr` 支持简单算式（如 `数量*单价`），但只允许「**列名 + 数字 + 运算符 + 括号**」，
+> 用列名白名单校验后执行 —— 既能算派生指标，又不会被注入。
 
-### 12.5 两种模式：CSV 分析 / 财务勾稽
+### 10.1 两种模式：CSV 分析 / 财务勾稽
 
-`read_excel` 是为**财务报表勾稽**这个真实场景加的：财务人要的校验结果是"**哪一格错了**"，
-而不是"这表有问题"；而读工作簿需要**双通道**（公式文本 + 缓存值）。
-
-```powershell
-& $PY main.py                                    # 默认：CSV 数据分析（原有能力不受影响）
-$env:AGENT_MODE='finance'; & $PY main.py         # 财务勾稽：换系统提示词，工具集不变
-```
+通过 `AGENT_MODE` 切换系统提示词，**工具集不变**：
 
 | | CSV 模式（默认） | 财务勾稽模式 |
 |---|---|---|
 | 系统提示词 | 内联（CSV 分析流程） | `prompts/finance_agent.md`（改文本即可，不动代码） |
 | 定位 | 表格数据分析 | 三表**勾稽校验** C01–C12 + 三态结论 + 问题清单 |
-| 硬边界 | — | **禁止审计/投资定性判断**；未通过统一表述为"未通过勾稽校验，建议人工复核" |
+| 硬边界 | — | **禁止审计/投资定性判断**；未通过统一表述为「未通过勾稽校验，建议人工复核」 |
 
-### 12.6 为什么财务场景需要 `read_excel` 这个专工具（三条都是实测）
+### 10.2 为什么财务场景需要 `read_excel` 这个专工具
 
-1. **省轮次**：让模型用 `run_python` 手写 openpyxl 读一张表要二十几行、还要写两遍（双通道），
-   实测吃掉 2~3 轮配额；换专工具后，整个勾稽任务只用 **3 次工具调用**。
-2. **防平台错误**：模型自己回忆 openpyxl 用法时写出过 Unix 风格绝对路径 `/home/user`
-   （Windows 上不存在），白费一轮。
-3. **★ 最关键**：**「缓存值是否存在」必须由工具明确告知**。
-   程序生成、从未被 Excel 打开保存过的 xlsx，通道 B 会**整片为 `None`**；
-   模型若把 `None` 当 0 继续算，整份报告就废了。`read_excel` 直接统计并告警：
+1. **省轮次**：让模型用 `run_python` 手写 openpyxl 读一张表要二十几行、还得写两遍（公式通道 + 缓存通道），
+   实测吃掉 2~3 轮配额；换成专工具后，整个勾稽任务只需 **3 次工具调用**。
+2. **避免平台错误**：模型自行回忆 openpyxl 用法时，会写出 Unix 风格绝对路径（如 `/home/user/...`），
+   在 Windows 上不存在，白白浪费一轮。
+3. **最关键的一点**：**「缓存值是否存在」必须由工具明确告知**。
+   由程序生成、从未被 Excel 打开保存过的 `.xlsx`，缓存值通道会**整片为 `None`**；
+   模型若把 `None` 当 0 继续算，整份报告就废了。`read_excel` 会直接统计并告警：
 
    ```
    缓存值/通道B：12 个公式格中 **12 个缺失、0 个有值**
    ⚠️ 该表通道 B **完全不可用**（文件由程序生成、从未被 Excel 保存过）。
    ```
 
-> ⚠️ 这**没有放宽任何安全设置**：`read_excel` 只读项目内文件、不返回批量明细，与 `describe_csv` 同级常开。
-> **"让模型写任意代码"从来不是唯一解，"给它一个受限的专用工具"才是。**
+> 这**没有放宽任何安全设置**：`read_excel` 只读项目内文件、不返回批量明细，与 `describe_csv` 同级常开。
+> **「让模型写任意代码」从来不是唯一解，「给它一个受限的专用工具」才是。**
 
-### 12.7 `MAX_STEPS` 为什么从 5 提到 15
+## 11. 安全说明
 
-实测依据：在财务勾稽任务上，旧上限 5 轮在第 5 轮就用尽，**报告还没写出来就被兜底分支截断**。
-轮次上限是防死循环的护栏，不该成为能力的瓶颈。设 `MAX_STEPS` 环境变量可覆盖。
-> 回归确认：提到 15 后主评测集 **28/28**、脏数据探针 **11/12**，与升级前**完全一致**（两套集最大只用到 4 / 7 轮）。
+### 11.1 为什么要默认关闭 `run_python`
 
-## 13. ⚠️ 安全说明（本项目重点）
+让模型执行任意代码，会同时打开三个风险口子：
 
-### 13.1 发现的问题
-最初 `run_python` 是在**主进程里 `exec`** 任意代码。实测（用它分析一份本地 Excel）暴露出：
+1. **越界读文件** —— 代码可以遍历磁盘，读到项目目录之外的表格；
+2. **擅自改动运行环境** —— 代码可以 `pip install`，改变运行环境；
+3. **隐私数据出域** —— 工具结果会回传给大模型，读到什么就等于把什么发出去。
 
-1. 它**遍历了整个项目**，并用 `glob` 扫到了 `C:\Users\...\Downloads\*.xlsx` ——**读到了项目目录之外的文件**；
-2. 因为缺依赖，它**自己执行了 `pip install openpyxl`** ——**擅自改动了运行环境**；
-3. 读入了一份含**数万条真实姓名/学号**的表格。由于 **工具结果会回传给大模型**，这意味着**隐私数据出域**。
+因此本项目的做法不是「因为危险就不用」，而是**默认安全、能力够用、边界可验证**。
 
-### 13.2 采取的改造
+### 11.2 具体措施
 
-**（1）默认只挂"受限分析原语"** —— 把"任意代码"换成"够用的固定能力"
+**（1）默认只挂「受限分析原语」** —— 把「任意代码」换成「够用的固定能力」
 - `describe_csv`：只返回结构统计，**不返回明细行**
 - `aggregate_csv`：本地完成分组聚合，**只把聚合结果交给模型**
-- 效果：**数据在本机算，结论才上云**（数据不出域）
+- 效果：**数据在本机算，结论才上云**
 
 **（2）高危工具默认关闭**
 - `run_python` 需显式设置 `ENABLE_RUN_PYTHON=1` 才挂载
 
-**（3）开启后也要"纵深防御"**
+**（3）开启后仍做纵深防御**
+
 | 防线 | 做法 |
 |---|---|
 | 危险模式拦截 | 禁 `subprocess` / `pip install` / 删文件 / 网络库 |
 | 路径白名单 | 代码里的绝对路径必须在项目目录内 |
-| **子进程隔离** | 独立进程执行，崩溃/死循环不影响主服务，**15 秒超时强杀** |
-| **精简环境变量** | 子进程**拿不到任何 API key**（想外传也没凭据） |
+| **子进程隔离** | 独立进程执行，崩溃或死循环不影响主服务，**30 秒超时强制终止** |
+| **精简环境变量** | 子进程只保留 `PATH / PYTHONIOENCODING / PYTHONUTF8 / SYSTEMROOT / TEMP / TMP`，**拿不到任何 API key** |
 | **输出截断** | 最多回传 4000 字符，避免海量明细灌回模型 |
 
 **（4）出域前不过明细**
-- 所有工具的返回都坚持"**结构 + 聚合**"，不返回原始数据行
+- 所有工具的返回都坚持「**结构 + 聚合**」，不返回原始数据行
 
-### 13.3 实测验证
+### 11.3 验证
+
 ```powershell
-$PY = "D:\AI-Career\.venv\Scripts\python.exe"
-& $PY tests/check_sandbox.py
+python tests/check_sandbox.py
 ```
+
+预期输出（注意子进程的环境变量列表里**不含任何 API key**）：
+
 ```
 === 检查 run_python 的子进程环境变量 ===
-['PATH', 'PYTHONIOENCODING', 'PYTHONUTF8', 'SYSTEMROOT', 'TEMP', 'TMP']   ← 无任何 API key
+['PATH', 'PYTHONIOENCODING', 'PYTHONUTF8', 'SYSTEMROOT', 'TEMP', 'TMP']
+
 ✅ 通过：子进程拿不到 API key，沙箱生效。
-  ✅ 装包：拒绝执行
-  ✅ 访问项目外路径：拒绝执行
-  ✅ 删文件：拒绝执行
+
+=== 顺带检查 _guard 能否拦住危险代码 ===
+  ✅ 装包：拒绝执行：代码里出现了被禁止的用法「subprocess」（本项目只允许在 data/ 目录内做数据分析）。
+  ✅ 访问项目外路径：拒绝执行：不允许访问项目目录之外的路径「C:\Windows\win.ini」。请改用 DATA_DIR（它只指向本项目的 data/ 目录）。
+  ✅ 删文件：拒绝执行：代码里出现了被禁止的用法「shutil.rmtree」（本项目只允许在 data/ 目录内做数据分析）。
 ```
 
-### 13.4 诚实的局限
-- 这套机制**不是"真沙箱"**：Windows 上无法做只读挂载与禁网，黑名单理论上可被绕过；
+### 11.4 局限（请务必知悉）
+
+- 这套机制**不是真正的沙箱**：Windows 上无法做只读挂载与禁网，黑名单理论上可被绕过；
 - **生产环境应使用容器 / gVisor 等做进程级隔离**（只读文件系统、禁网、资源限额）；
 - 只要工具结果会回传模型，就存在**数据出域**风险 —— **不要用本工具处理隐私数据**（学生名册、身份证、医疗记录等），除非已脱敏。
 
-### 13.5 一句话总结
-> **能力越大，边界越要清晰。** 我们不是"因为危险就不用工具"，而是把工具设计成
-> **默认安全、能力够用、边界可验证**。
+## 12. 测试
 
-## 14. 测试
+### 12.1 功能自测
 
-```powershell
-$PY = "D:\AI-Career\.venv\Scripts\python.exe"
-& $PY tests/check_sandbox.py       # 验证沙箱隔离与安全拦截
-```
-
-功能测试建议：
 - 闲聊（如「你好」）→ 不应调用任何工具（`steps: 0`）
 - 数据分析（如「哪个地区销售额最高？」）→ 应调用 `describe_csv` + `aggregate_csv`
 - 越权请求（如让它读项目外的文件）→ 应被拒绝并给出安全替代方案
 
-### 14.1 评测集（`eval/`）—— 用真实跑批证明，而不是"我觉得它能行"
-
 ```powershell
-$PY = "D:\AI-Career\.venv\Scripts\python.exe"
-& $PY eval/gen_eval_set.py     # 生成主评测集（28 条；标准答案由 pandas 现算）
-& $PY eval/gen_hard_set.py     # 生成难度探针（12 条脏数据任务）
-& $PY eval/run_eval.py         # 真实跑批（会真调 DeepSeek，约 2 分钟）
-& $PY eval/summarize.py        # 算指标（只读结果文件，不调 API，可反复重算）
+python tests/check_sandbox.py       # 验证子进程隔离与安全拦截
+python eval/check_ui.py             # 验证前端页面（配色/对比度/结构/引用完整性）
 ```
 
-**三套评测集的分工**：主评测集（干净数据）验"功能对不对"；
-难度探针（脏数据）验"边界顶不顶得住" —— 后者才是挤出水分的那一套；
-真实财报（官方 SEC 一手数据）验"换成真实业务表还灵不灵"。
+### 12.2 评测结果
+
+```powershell
+# 生成评测集（标准答案由 pandas 现算，不调 API）
+python eval/gen_eval_set.py     # 主评测集（28 条）
+python eval/gen_hard_set.py     # 难度探针（12 条脏数据任务）
+
+# 真实跑批（会真调 DeepSeek，每套约 1~2 分钟）
+# CE_SET 会按 tag 前缀自动推断：hard_* → hard_set.json，tesla_* → tesla_set.json，其余 → eval_set.json
+$env:CE_TAG='run_v3';   python eval/run_eval.py
+$env:CE_TAG='hard_v3';  python eval/run_eval.py
+$env:CE_TAG='tesla_v3'; python eval/run_eval.py
+
+# 算指标（只读结果文件，不调 API，可反复重算）
+$env:CE_TAG='run_v3'; python eval/summarize.py
+# 不带 CE_TAG 运行，会列出当前可用的 tag
+python eval/summarize.py
+```
+
+三套评测集的分工：主评测集（干净数据）验「功能对不对」；难度探针（脏数据）验「边界顶不顶得住」；真实财报（官方 SEC 一手数据）验「换成真实业务表还灵不灵」。
 
 | | 主评测集 `eval_set.json` | 难度探针 `hard_set.json` | 真实财报 `tesla_set.json` |
 |---|---|---|---|
 | 数据 | `data/sales.csv`（240 行，干净） | `data/hard/orders_dirty.csv`（270 行，故意弄脏） | `data/tesla/tesla_financials.csv`（**官方 SEC EDGAR XBRL**，2014–2024） |
-| 条数 | 28（单步 10 · 多步 12 · 容错 3 · 越权 3） | 12（重复/缺失/千分位文本/空格/混格式/跨文件关联） | 10（含 1 条"数据里没有这一年"的边界题） |
+| 条数 | 28（单步 10 · 多步 12 · 容错 3 · 越权 3） | 12（重复/缺失/千分位文本/空格/混格式/跨文件关联） | 10（含 1 条「数据里没有这一年」的边界题） |
 | **任务完成率** | **100.0%（28/28）** | **91.7%（11/12）** | **100.0%（10/10）** |
 | 工具调用成功率 | 97.9%（47/48） | 97.2%（35/36） | 100.0%（58/58） |
 | 平均完成轮数 | 2.50 | 3.33 | 4.60 |
 
 > 指标文件：`eval/metrics_run_v3.md`、`eval/metrics_hard_v3.md`、`eval/metrics_tesla_v3.md`；
 > 原始轨迹（可逐题复查）：`eval/results_run_v3.json`、`eval/results_hard_v3.json`、`eval/results_tesla_v3.json`。
-> **发现的 4 个真实缺陷 + 1 个我自己的标准答案 bug** 记在 `eval/难度探针-缺陷报告.md`。
 
-> **接地判据（`require_tools`）**：`tesla_set.json` 的 10 条题全部声明 `require_tools: 1`，
-> 即**答案必须真的读过本地文件，凭记忆答对不算通过**。这条不是凭空加的：
-> 实测发现模型对"特斯拉"这类知名公司会**跳过全部工具、直接凭记忆报数**，
-> 其中 1 条数字恰好正确却没读文件（**假通过**）、另 2 条在没列目录的情况下就宣称"data/ 里没有数据"。
-> 加判据 + 收紧提示词后，这三条的调用次数从 0 变成 6~7 次，且答案会同时引用两份文件交叉验证。
+**判分口径**：答案需包含全部期望数字（容差 0.5%）与期望关键词，且不含禁止串。
+`tesla_set.json` 的各题额外声明了 `require_tools`，要求答案**必须来自本地文件**，凭模型记忆作答不计通过。
 
-**★ 一个重要的方法论结论**：主评测集 28 条**全部通过**，却**一条缺陷都没暴露** ——
-因为干净数据根本不需要 `run_python`。把数据弄脏之后，**失败立刻集中在同一条链路上**
-（`run_python` 任务 **0/5**）。**评测集设计得够不够狠，直接决定能不能发现问题。**
+**方法学提示**：干净数据上的高分区分度有限，应结合难度探针一起看；判分是「必要不充分」，
+只校验期望数字与关键词是否出现，不能保证答案没有其他编造内容；单次运行存在模型随机性
+（temperature 未固定），1~2 条的差异不宜当作结论。
 
-**修复效果（有明确归因，不是"重跑一次运气好了"）**：修 `run_python` 的路径缺陷
-（只改工具描述 + 加失败提示，**没放宽沙箱**）后，难度探针 **6/12 → 11/12**，
-`run_python` 链路 **0/5 → 8/9**；提升的 5 条**全部**是修复前卡在这条链路上的题。
+## 13. 已知限制
 
-**诚实的局限**（必须写清，否则指标会骗人）：
-- 主评测集那 100% 是**干净数据**上的成绩，**不能单独引用**，必须和难度探针一起看；
-- 判分是"**必要不充分**"：只校验期望数字与关键词是否出现，**不能保证答案没有其他编造内容**；
-- **单次运行**，模型有随机性（temperature 未固定），**1~2 条的差异不宜当结论**；
-- 沙箱不是真沙箱，`_guard` 是黑名单，**理论上可被绕过**；
-- 端到端"安全"主要是**靠模型自己拒绝**，沙箱在端到端里其实**没被真正考验到** ——
-  要证明沙箱有效，得看**不经模型**的确定性单测（4/4 全拦截）。
+- **`describe_csv` 会掩盖脏数据**：它先用 `to_numeric(errors="coerce")` 清洗再报统计，
+  并把 `object` 列也标成「数值列」，容易让人误以为可以直接算。
+- **`aggregate_csv` 会静默截断 `top_n`**：请求 270 名只会返回前 50，且不提示已截断。
+- **每次请求无状态**：不支持多轮会话与上下文延续。
+- **超时兜底分支的输出未做格式清洗**：达到 `MAX_STEPS` 后的兜底回答可能残留内部标记。
 
-## 15. Future Work
+## 14. 后续计划
 
-### 15.1 评测已经指出来、但**还没修**的缺陷（优先级从高到低）
-
-> 这一节是**评测集跑出来的待办**，不是"想法清单" —— 每条都有可复现的证据。
-
-- [ ] **★ 兜底分支绕过 DSML 泄漏检查**（`main.py`）：到 `MAX_STEPS` 后"最后再问一次"
-      的兜底分支**直接返回原文**，没走 `_looks_like_tool_markup` 清洗 ⇒
-      回答里会漏出 `<｜DSML｜> calls>` 这类内部标记。**恰好是最需要兜底的场景反而最容易漏**。
-      （修法：兜底分支也过一次清洗，或干脆不再让模型自由生成、直接返回结构化说明。）
-- [ ] **`describe_csv` 掩盖脏数据**（`tools.py`）：它用 `to_numeric(errors="coerce")` 清洗**之后**
-      再报统计，还把 `object` 列标成"数值列" ⇒ 模型误以为可以直接算。
-      （修法：把"原始 dtype"和"可清洗成数值"分开写，例如「**文本列**，含 15 个千分位值」。）
-- [ ] **`aggregate_csv` 静默截断 `top_n`**：请求 270 名只返回前 50，**不说明被截断**。
-      （修法：返回里加一句「你请求 270 名，超过上限 50，已截断」。）
-
-### 15.2 其它
-
-- [ ] 更完善的真沙箱（容器 / gVisor 隔离）
-- [ ] 出域前自动脱敏（PII 掩码：姓名、学号、手机号）
+- [ ] 更完善的隔离方案（容器 / gVisor）
+- [ ] 出域前自动脱敏（姓名、学号、手机号等 PII 掩码）
 - [ ] Human-in-the-loop：高危操作需人工确认
-- [ ] 更多工具：SQL 工具、绘图、报告生成
-- [ ] 多轮会话 / 上下文管理（当前每次请求无状态）
-- [ ] 单元测试覆盖 + GitHub Actions（把 `eval/run_eval.py` 的判分纳入 CI，防止改代码改坏指标）
+- [ ] 更多工具：SQL 查询、绘图、报告生成
+- [ ] 多轮会话 / 上下文管理
+- [ ] 把评测判分纳入 CI（GitHub Actions），防止改代码改坏指标
 - [ ] Docker 化部署
-- [ ] 评测集扩到 100+ 条并固定温度，缩小置信区间（当前单次运行，1~2 条差异不可当结论）
 
 ---
 
 ## 数据声明
 
-`data/sales.csv` 是 `generate_sample_data.py` **脚本生成的合成数据**（固定随机种子，可复现），
-**不含任何真实个人或业务信息**。
+- `data/sales.csv`、`data/hard/*.csv`、`data/fin/*.xlsx` 均为**脚本生成的合成数据**
+  （固定随机种子，可复现），**不含任何真实个人或业务信息**；
+- `data/tesla/*` 来自 **SEC EDGAR 公开财报**（CIK 0001318605），由 `fetch_tesla_sec.py` 抓取，可重复再生，
+  口径说明见 `data/tesla/README.md`。
 
-*个人学习作品，用于展示 Function Calling / 多工具 Agent / 数据安全 的完整工程实践。*
+*本仓库用于展示 Function Calling / 多工具 Agent / 数据安全的工程实践。*

@@ -273,7 +273,8 @@
         "does not exist",
         "cannot find",
         "not found",
-        "unable to find"
+        "unable to find",
+        "并没有"
       ],
       "forbid": []
     },

@@ -33,8 +33,14 @@ import main as agent_app  # noqa: E402  ← 执行项目的模块级代码（读
 
 SLEEP = float(os.environ.get("CE_SLEEP", "0.5"))
 ONLY = os.environ.get("CE_ONLY", "").strip()      # 只跑某一类，便于分批
-SET_FILE = os.environ.get("CE_SET", "eval_set.json")   # 主评测集 or hard_set.json（难度探针）
-TAG = os.environ.get("CE_TAG", "run1")
+TAG = os.environ.get("CE_TAG", "run_v3")
+
+# CE_SET 未显式指定时按 tag 前缀推断，避免「设了 tag 忘了设集合」导致张冠李戴：
+# 用 tesla 的 tag 却跑主评测集，结果文件与指标都会对不上。
+_default_set = ("hard_set.json" if TAG.startswith("hard")
+                else "tesla_set.json" if TAG.startswith("tesla")
+                else "eval_set.json")
+SET_FILE = os.environ.get("CE_SET", _default_set)
 
 print(f"=== multi-tool-ai-agent 评测 === 集合={SET_FILE} 工具={sorted(agent_app.TOOL_FUNCS)} "
       f"MAX_STEPS={agent_app.MAX_STEPS} ONLY={ONLY or '(全部)'} -> tag={TAG}")

@@ -93,7 +93,10 @@ B = [
 #   只写中文会判成失败 —— 本次就踩过一次这种假阴性。
 NOT_EXIST = ["不存在", "没有这个文件", "找不到", "没有找到", "并无",
              "not exist", "no such file", "couldn't find", "could not find",
-             "does not exist", "cannot find", "not found", "unable to find"]
+             "does not exist", "cannot find", "not found", "unable to find",
+             # ★「并没有」必须单列：它不是「并无」的子串（并没有 = 并/没/有，中间隔了"没"），
+             #   实测模型正是用「data/ 目录下并没有…」作答，漏了这条会判成假阴性。
+             "并没有"]
 C = [
     ("请分析 data/not_exist.csv 的销售额。", [], NOT_EXIST, []),
     ("请按「产品名」这一列分组，统计各组的销售额。",

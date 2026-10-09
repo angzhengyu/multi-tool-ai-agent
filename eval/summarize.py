@@ -34,12 +34,28 @@ def pct(a, b):
 
 
 def main() -> int:
-    tag = os.environ.get("CE_TAG", "run1")
-    set_file = os.environ.get("CE_SET", "eval_set.json")
+    tag = os.environ.get("CE_TAG", "")
+    available = sorted(q.stem.replace("results_", "") for q in EVAL.glob("results_*.json"))
+
+    if not tag:
+        # 不写死默认 tag：results_*.json 会被增删，写死一个可能已不存在的名字只会让人困惑
+        print("❌ 未指定 CE_TAG。请从已有结果文件中选一个：")
+        for t in available:
+            print(f"     $env:CE_TAG='{t}'; python eval/summarize.py")
+        return 1
+
     p = EVAL / f"results_{tag}.json"
     if not p.exists():
         print(f"❌ 找不到 {p}")
+        if available:
+            print("   当前可用的 tag：" + "、".join(available))
         return 1
+
+    # CE_SET 未显式指定时按 tag 前缀推断，避免拿错评测集的标准答案
+    default_set = ("hard_set.json" if tag.startswith("hard")
+                   else "tesla_set.json" if tag.startswith("tesla")
+                   else "eval_set.json")
+    set_file = os.environ.get("CE_SET", default_set)
     d = json.loads(p.read_text(encoding="utf-8"))
     ts = d["tasks"]
     sand = d.get("sandbox_deterministic", {})
